@@ -2,7 +2,7 @@ import Foundation
 
 // MARK: - Spaces API
 
-extension Client {
+extension HubClient {
     /// Lists Spaces from the Hub.
     ///
     /// - Parameters:

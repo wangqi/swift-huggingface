@@ -34,7 +34,7 @@ public enum OAuth {
         public let canPay: Bool?
 
         /// Organizations the user belongs to.
-        public let organizations: [OAuth.Organization]
+        public let organizations: [OrgInfo]
 
         private enum CodingKeys: String, CodingKey {
             case userID = "sub"
@@ -52,9 +52,9 @@ public enum OAuth {
     }
 
     /// OAuth organization information.
-    public struct Organization: Codable, Sendable {
+    public struct OrgInfo: Identifiable, Codable, Sendable {
         /// ID of the organization.
-        public let organizationID: String
+        public let id: String
 
         /// Name of the organization.
         public let name: String
@@ -87,10 +87,10 @@ public enum OAuth {
         public let securityRestrictions: [String]?
 
         /// Resource groups the user has access to.
-        public let resourceGroups: [OAuth.ResourceGroup]?
+        public let resourceGroups: [ResourceGroup]?
 
         private enum CodingKeys: String, CodingKey {
-            case organizationID = "sub"
+            case id = "sub"
             case name
             case avatarURL = "picture"
             case username = "preferred_username"
@@ -103,17 +103,5 @@ public enum OAuth {
             case securityRestrictions
             case resourceGroups
         }
-    }
-
-    /// OAuth resource group information.
-    public struct ResourceGroup: Codable, Sendable {
-        /// ID of the resource group.
-        public let resourceGroupID: String
-
-        /// Name of the resource group.
-        public let name: String
-
-        /// User's role in the resource group.
-        public let role: String
     }
 }

@@ -22,7 +22,7 @@ import EventSource
 /// The endpoint can be customized via the `HF_ENDPOINT` environment variable.
 ///
 /// - SeeAlso: [Hub API Documentation](https://huggingface.co/docs/hub/api)
-public final class Client: Sendable {
+public final class HubClient: Sendable {
     /// The default host URL for the Hugging Face Hub API.
     public static let defaultHost = URL(string: "https://huggingface.co")!
 
@@ -31,7 +31,7 @@ public final class Client: Sendable {
     /// This client automatically detects the authentication token from environment variables
     /// or standard token file locations, and uses the endpoint specified by `HF_ENDPOINT`
     /// environment variable (defaults to https://huggingface.co).
-    public static let `default` = Client()
+    public static let `default` = HubClient()
 
     /// The host URL for requests made by the client.
     public let host: URL

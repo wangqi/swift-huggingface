@@ -2,7 +2,7 @@ import Foundation
 
 // MARK: - Collections API
 
-extension Client {
+extension HubClient {
     /// Lists collections from the Hub.
     ///
     /// - Parameters:

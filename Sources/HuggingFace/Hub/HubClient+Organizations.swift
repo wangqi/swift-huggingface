@@ -2,7 +2,7 @@ import Foundation
 
 // MARK: - Organizations API
 
-extension Client {
+extension HubClient {
     /// Lists organizations from the Hub.
     ///
     /// - Parameters:

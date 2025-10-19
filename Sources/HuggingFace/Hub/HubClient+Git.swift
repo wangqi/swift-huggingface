@@ -2,7 +2,7 @@ import Foundation
 
 // MARK: - Git Operations API
 
-extension Client {
+extension HubClient {
     // MARK: - Tree Operations
 
     /// Lists files and directories in a model repository tree.

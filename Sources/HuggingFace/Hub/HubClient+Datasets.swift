@@ -2,7 +2,7 @@ import Foundation
 
 // MARK: - Datasets API
 
-extension Client {
+extension HubClient {
     /// Lists datasets from the Hub.
     ///
     /// - Parameters:

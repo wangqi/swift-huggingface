@@ -7,11 +7,11 @@ import Testing
     @Suite("User Tests", .serialized)
     struct UserTests {
         /// Helper to create a URL session with mock protocol handlers
-        func createMockClient(bearerToken: String? = nil) -> Client {
+        func createMockClient(bearerToken: String? = nil) -> HubClient {
             let configuration = URLSessionConfiguration.ephemeral
             configuration.protocolClasses = [MockURLProtocol.self]
             let session = URLSession(configuration: configuration)
-            return Client(
+            return HubClient(
                 session: session,
                 host: URL(string: "https://huggingface.co")!,
                 userAgent: "TestClient/1.0",
@@ -89,7 +89,7 @@ import Testing
 
             let client = createMockClient()  // No bearer token
 
-            await #expect(throws: Client.ClientError.self) {
+            await #expect(throws: HubClient.ClientError.self) {
                 _ = try await client.whoami()
             }
         }
@@ -117,7 +117,7 @@ import Testing
 
             let client = createMockClient(bearerToken: "invalid_token")
 
-            await #expect(throws: Client.ClientError.self) {
+            await #expect(throws: HubClient.ClientError.self) {
                 _ = try await client.whoami()
             }
         }

@@ -7,11 +7,11 @@ import Testing
     @Suite("Paper Tests", .serialized)
     struct PaperTests {
         /// Helper to create a URL session with mock protocol handlers
-        func createMockClient() -> Client {
+        func createMockClient() -> HubClient {
             let configuration = URLSessionConfiguration.ephemeral
             configuration.protocolClasses = [MockURLProtocol.self]
             let session = URLSession(configuration: configuration)
-            return Client(
+            return HubClient(
                 session: session,
                 host: URL(string: "https://huggingface.co")!,
                 userAgent: "TestClient/1.0"
@@ -222,7 +222,7 @@ import Testing
 
             let client = createMockClient()
 
-            await #expect(throws: Client.ClientError.self) {
+            await #expect(throws: HubClient.ClientError.self) {
                 _ = try await client.getPaper("9999.99999")
             }
         }

@@ -7,7 +7,7 @@ import Testing
 struct HubClientTests {
     @Test("Client can be initialized with default configuration")
     func testDefaultClientInitialization() {
-        let client = Client.default
+        let client = HubClient.default
         #expect(client.host == URL(string: "https://huggingface.co/")!)
         #expect(client.userAgent == nil)
         #expect(client.bearerToken == nil)
@@ -19,7 +19,7 @@ struct HubClientTests {
         let userAgent = "TestApp/1.0"
         let bearerToken = "test_token"
 
-        let client = Client(
+        let client = HubClient(
             host: host,
             userAgent: userAgent,
             bearerToken: bearerToken
@@ -33,7 +33,7 @@ struct HubClientTests {
     @Test("Client normalizes host URL with trailing slash")
     func testHostNormalization() {
         let hostWithoutSlash = URL(string: "https://huggingface.co")!
-        let client = Client(host: hostWithoutSlash)
+        let client = HubClient(host: hostWithoutSlash)
 
         #expect(client.host.path.hasSuffix("/"))
     }

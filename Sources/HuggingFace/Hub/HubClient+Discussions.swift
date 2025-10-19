@@ -2,7 +2,7 @@ import Foundation
 
 // MARK: - Discussions API
 
-extension Client {
+extension HubClient {
     // MARK: - List Discussions
 
     /// Lists discussions for a repository.

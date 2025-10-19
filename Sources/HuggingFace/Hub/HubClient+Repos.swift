@@ -2,7 +2,7 @@ import Foundation
 
 // MARK: - Repos API
 
-extension Client {
+extension HubClient {
 
     /// Creates a new repository on the Hub.
     ///

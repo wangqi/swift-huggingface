@@ -2,7 +2,7 @@ import Foundation
 
 // MARK: - Models API
 
-extension Client {
+extension HubClient {
     /// Lists models from the Hub.
     ///
     /// - Parameters:

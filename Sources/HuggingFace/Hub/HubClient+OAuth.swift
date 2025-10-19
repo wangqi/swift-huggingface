@@ -1,18 +1,6 @@
 import Foundation
 
-// MARK: - User API
-
-extension Client {
-    /// Gets information about the authenticated user.
-    ///
-    /// Requires authentication with a Bearer token.
-    ///
-    /// - Returns: Information about the authenticated user.
-    /// - Throws: An error if the request fails or the response cannot be decoded.
-    public func whoami() async throws -> User {
-        return try await fetch(.get, "/api/whoami-v2")
-    }
-
+extension HubClient {
     /// Gets OAuth user information.
     ///
     /// Only available through OAuth access tokens. Information varies depending on the scope

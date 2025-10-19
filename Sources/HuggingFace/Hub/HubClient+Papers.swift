@@ -2,7 +2,7 @@ import Foundation
 
 // MARK: - Papers API
 
-extension Client {
+extension HubClient {
     /// Lists papers from the Hub.
     ///
     /// - Parameters:

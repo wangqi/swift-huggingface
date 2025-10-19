@@ -7,11 +7,11 @@ import Testing
     @Suite("Model Tests", .serialized)
     struct ModelTests {
         /// Helper to create a URL session with mock protocol handlers
-        func createMockClient() -> Client {
+        func createMockClient() -> HubClient {
             let configuration = URLSessionConfiguration.ephemeral
             configuration.protocolClasses = [MockURLProtocol.self]
             let session = URLSession(configuration: configuration)
-            return Client(
+            return HubClient(
                 session: session,
                 host: URL(string: "https://huggingface.co")!,
                 userAgent: "TestClient/1.0"
@@ -231,7 +231,7 @@ import Testing
             let client = createMockClient()
             let repoID: Repo.ID = "nonexistent/model"
 
-            await #expect(throws: Client.ClientError.self) {
+            await #expect(throws: HubClient.ClientError.self) {
                 _ = try await client.getModel(repoID)
             }
         }
@@ -261,7 +261,7 @@ import Testing
             let client = createMockClient()
             let repoID: Repo.ID = "private/model"
 
-            await #expect(throws: Client.ClientError.self) {
+            await #expect(throws: HubClient.ClientError.self) {
                 _ = try await client.getModel(repoID)
             }
         }
@@ -294,7 +294,7 @@ import Testing
             let configuration = URLSessionConfiguration.ephemeral
             configuration.protocolClasses = [MockURLProtocol.self]
             let session = URLSession(configuration: configuration)
-            let client = Client(
+            let client = HubClient(
                 session: session,
                 host: URL(string: "https://huggingface.co")!,
                 bearerToken: "test_token"
