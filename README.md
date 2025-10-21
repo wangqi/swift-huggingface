@@ -850,35 +850,3 @@ let response = try await client.speechToText(
 
 print("Transcription: \(response.text)")
 ```
-
----
-
-
-### OAuth Authentication
-
-The OAuth API provides secure user authentication using OAuth 2.0 with PKCE. This allows your app to authenticate users and access their Hugging Face resources on their behalf.
-
-#### Available OAuth Scopes
-
-| Scope | Description |
-|-------|-------------|
-| `openid` | Get the ID token in addition to the access token |
-| `profile` | Get the user's profile information (username, avatar, etc.) |
-| `email` | Get the user's email address |
-| `readBilling` | Know whether the user has a payment method set up |
-| `readRepos` | Get read access to the user's personal repos |
-| `writeRepos` | Get write/read access to the user's personal repos |
-| `manageRepos` | Get full access to the user's personal repos |
-| `inferenceAPI` | Get access to the Inference API |
-| `writeDiscussions` | Open discussions and Pull Requests on behalf of the user |
-
-#### Predefined Scope Sets
-
-| Set | Scopes Included |
-|-----|----------------|
-| `.basic` | `openid`, `profile`, `email` |
-| `.readAccess` | `openid`, `profile`, `email`, `readRepos` |
-| `.writeAccess` | `openid`, `profile`, `email`, `writeRepos` |
-| `.fullAccess` | `openid`, `profile`, `email`, `manageRepos`, `inferenceAPI` |
-| `.inferenceOnly` | `openid`, `inferenceAPI` |
-| `.discussions` | `openid`, `profile`, `email`, `writeDiscussions` |
