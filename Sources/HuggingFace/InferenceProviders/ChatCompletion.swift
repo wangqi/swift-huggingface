@@ -141,7 +141,8 @@ public enum ChatCompletion {
         ///   - name: Optional name for the message sender.
         ///   - toolCalls: Optional tool calls made by the assistant.
         ///   - toolCallId: Optional tool call ID for tool messages.
-        internal init(
+        // wangqi 2025-12-02: Changed from internal to public to allow creating assistant messages with tool calls
+        public init(
             role: Role,
             content: Content? = nil,
             name: String? = nil,
