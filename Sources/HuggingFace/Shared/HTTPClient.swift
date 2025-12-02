@@ -366,7 +366,8 @@ final class HTTPClient: @unchecked Sendable {
 }
 
 /// Represents errors that can occur during API operations.
-public enum HTTPClientError: Error, Hashable, Sendable, CustomStringConvertible {
+// wangqi 2025-12-02: Added LocalizedError conformance for proper error message propagation
+public enum HTTPClientError: Error, Hashable, Sendable, CustomStringConvertible, LocalizedError {
     /// An error encountered while constructing the request.
     case requestError(String)
 
@@ -390,5 +391,10 @@ public enum HTTPClientError: Error, Hashable, Sendable, CustomStringConvertible 
         case .unexpectedError(let detail):
             return "Unexpected error: \(detail)"
         }
+    }
+
+    // wangqi 2025-12-02: LocalizedError implementation for proper error.localizedDescription
+    public var errorDescription: String? {
+        return description
     }
 }
