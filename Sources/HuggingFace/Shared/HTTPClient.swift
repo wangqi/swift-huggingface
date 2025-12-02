@@ -29,6 +29,10 @@ final class HTTPClient: @unchecked Sendable {
     /// The underlying URL session.
     let session: URLSession
 
+    // wangqi 2025-12-02: Add middleware support for debugging
+    /// The middlewares for intercepting HTTP requests and responses.
+    let middlewares: [HuggingFaceMiddleware]
+
     /// A shared JSON decoder with consistent configuration.
     private let jsonDecoder: JSONDecoder = {
         let decoder = JSONDecoder()
@@ -42,11 +46,14 @@ final class HTTPClient: @unchecked Sendable {
     ///   - userAgent: The value for the `User-Agent` header sent in requests.
     ///   - tokenProvider: The token provider for authentication.
     ///   - session: The underlying URL session.
+    ///   - middlewares: The middlewares for intercepting HTTP requests and responses.
+    // wangqi 2025-12-02: Updated initializer with middlewares parameter
     init(
         host: URL,
         userAgent: String? = nil,
         tokenProvider: TokenProvider = .environment,
-        session: URLSession = URLSession(configuration: .default)
+        session: URLSession = URLSession(configuration: .default),
+        middlewares: [HuggingFaceMiddleware] = []
     ) {
         var host = host
         if !host.path.hasSuffix("/") {
@@ -57,6 +64,7 @@ final class HTTPClient: @unchecked Sendable {
         self.userAgent = userAgent
         self.tokenProvider = tokenProvider
         self.session = session
+        self.middlewares = middlewares
     }
 
     private struct ClientErrorResponse: Decodable {
@@ -71,24 +79,45 @@ final class HTTPClient: @unchecked Sendable {
         params: [String: Value]? = nil,
         headers: [String: String]? = nil
     ) async throws -> T {
-        let request = try createRequest(method, path, params: params, headers: headers)
-        let (data, response) = try await session.data(for: request)
-        let httpResponse = try validateResponse(response, data: data)
+        var request = try createRequest(method, path, params: params, headers: headers)
 
-        if T.self == Bool.self {
-            // If T is Bool, we return true for successful response
-            return true as! T
-        } else if data.isEmpty {
-            throw HTTPClientError.responseError(response: httpResponse, detail: "Empty response body")
-        } else {
-            do {
-                return try jsonDecoder.decode(T.self, from: data)
-            } catch {
-                throw HTTPClientError.decodingError(
-                    response: httpResponse,
-                    detail: "Error decoding response: \(error.localizedDescription)"
-                )
+        // wangqi 2025-12-02: Apply request middlewares
+        for middleware in middlewares {
+            request = middleware.intercept(request: request)
+        }
+
+        do {
+            let (data, response) = try await session.data(for: request)
+            let httpResponse = try validateResponse(response, data: data)
+
+            // wangqi 2025-12-02: Apply response middlewares
+            var interceptedData = data
+            for middleware in middlewares {
+                let result = middleware.intercept(response: httpResponse, request: request, data: interceptedData)
+                interceptedData = result.data ?? interceptedData
             }
+
+            if T.self == Bool.self {
+                // If T is Bool, we return true for successful response
+                return true as! T
+            } else if interceptedData.isEmpty {
+                throw HTTPClientError.responseError(response: httpResponse, detail: "Empty response body")
+            } else {
+                do {
+                    return try jsonDecoder.decode(T.self, from: interceptedData)
+                } catch {
+                    throw HTTPClientError.decodingError(
+                        response: httpResponse,
+                        detail: "Error decoding response: \(error.localizedDescription)"
+                    )
+                }
+            }
+        } catch {
+            // wangqi 2025-12-02: Apply error middlewares
+            for middleware in middlewares {
+                middleware.interceptError(response: nil, request: request, data: nil, error: error)
+            }
+            throw error
         }
     }
 
@@ -98,19 +127,40 @@ final class HTTPClient: @unchecked Sendable {
         params: [String: Value]? = nil,
         headers: [String: String]? = nil
     ) async throws -> PaginatedResponse<T> {
-        let request = try createRequest(method, path, params: params, headers: headers)
-        let (data, response) = try await session.data(for: request)
-        let httpResponse = try validateResponse(response, data: data)
+        var request = try createRequest(method, path, params: params, headers: headers)
+
+        // wangqi 2025-12-02: Apply request middlewares
+        for middleware in middlewares {
+            request = middleware.intercept(request: request)
+        }
 
         do {
-            let items = try jsonDecoder.decode([T].self, from: data)
-            let nextURL = httpResponse.nextPageURL()
-            return PaginatedResponse(items: items, nextURL: nextURL)
+            let (data, response) = try await session.data(for: request)
+            let httpResponse = try validateResponse(response, data: data)
+
+            // wangqi 2025-12-02: Apply response middlewares
+            var interceptedData = data
+            for middleware in middlewares {
+                let result = middleware.intercept(response: httpResponse, request: request, data: interceptedData)
+                interceptedData = result.data ?? interceptedData
+            }
+
+            do {
+                let items = try jsonDecoder.decode([T].self, from: interceptedData)
+                let nextURL = httpResponse.nextPageURL()
+                return PaginatedResponse(items: items, nextURL: nextURL)
+            } catch {
+                throw HTTPClientError.decodingError(
+                    response: httpResponse,
+                    detail: "Error decoding response: \(error.localizedDescription)"
+                )
+            }
         } catch {
-            throw HTTPClientError.decodingError(
-                response: httpResponse,
-                detail: "Error decoding response: \(error.localizedDescription)"
-            )
+            // wangqi 2025-12-02: Apply error middlewares
+            for middleware in middlewares {
+                middleware.interceptError(response: nil, request: request, data: nil, error: error)
+            }
+            throw error
         }
     }
 
@@ -120,10 +170,19 @@ final class HTTPClient: @unchecked Sendable {
         params: [String: Value]? = nil,
         headers: [String: String]? = nil
     ) -> AsyncThrowingStream<T, Swift.Error> {
-        AsyncThrowingStream { @Sendable continuation in
+        // wangqi 2025-12-02: Capture middlewares for use in async context
+        let capturedMiddlewares = self.middlewares
+
+        return AsyncThrowingStream { @Sendable continuation in
             let task = Task {
                 do {
-                    let request = try createRequest(method, path, params: params, headers: headers)
+                    var request = try createRequest(method, path, params: params, headers: headers)
+
+                    // wangqi 2025-12-02: Apply request middlewares
+                    for middleware in capturedMiddlewares {
+                        request = middleware.intercept(request: request)
+                    }
+
                     let (bytes, response) = try await session.bytes(for: request)
                     let httpResponse = try validateResponse(response)
 
@@ -132,19 +191,29 @@ final class HTTPClient: @unchecked Sendable {
                         for try await byte in bytes {
                             errorData.append(byte)
                         }
+                        // wangqi 2025-12-02: Apply error middlewares for non-2xx responses
+                        for middleware in capturedMiddlewares {
+                            middleware.interceptError(response: httpResponse, request: request, data: errorData, error: nil)
+                        }
                         // validateResponse will throw the appropriate error
                         _ = try validateResponse(response, data: errorData)
                         return  // This line will never be reached, but satisfies the compiler
                     }
 
                     for try await event in bytes.events {
+                        // wangqi 2025-12-02: Apply streaming line middlewares
+                        var eventData = event.data
+                        for middleware in capturedMiddlewares {
+                            eventData = middleware.interceptStreamingLine(request: request, eventData)
+                        }
+
                         // Check for [DONE] signal
-                        if event.data.trimmingCharacters(in: .whitespacesAndNewlines) == "[DONE]" {
+                        if eventData.trimmingCharacters(in: .whitespacesAndNewlines) == "[DONE]" {
                             continuation.finish()
                             return
                         }
 
-                        guard let jsonData = event.data.data(using: .utf8) else {
+                        guard let jsonData = eventData.data(using: .utf8) else {
                             continue
                         }
 
@@ -160,6 +229,10 @@ final class HTTPClient: @unchecked Sendable {
 
                     continuation.finish()
                 } catch {
+                    // wangqi 2025-12-02: Apply error middlewares
+                    for middleware in capturedMiddlewares {
+                        middleware.interceptError(response: nil, request: nil, data: nil, error: error)
+                    }
                     continuation.finish(throwing: error)
                 }
             }
@@ -176,11 +249,32 @@ final class HTTPClient: @unchecked Sendable {
         params: [String: Value]? = nil,
         headers: [String: String]? = nil
     ) async throws -> Data {
-        let request = try createRequest(method, path, params: params, headers: headers)
-        let (data, response) = try await session.data(for: request)
-        let _ = try validateResponse(response, data: data)
+        var request = try createRequest(method, path, params: params, headers: headers)
 
-        return data
+        // wangqi 2025-12-02: Apply request middlewares
+        for middleware in middlewares {
+            request = middleware.intercept(request: request)
+        }
+
+        do {
+            let (data, response) = try await session.data(for: request)
+            let httpResponse = try validateResponse(response, data: data)
+
+            // wangqi 2025-12-02: Apply response middlewares
+            var interceptedData = data
+            for middleware in middlewares {
+                let result = middleware.intercept(response: httpResponse, request: request, data: interceptedData)
+                interceptedData = result.data ?? interceptedData
+            }
+
+            return interceptedData
+        } catch {
+            // wangqi 2025-12-02: Apply error middlewares
+            for middleware in middlewares {
+                middleware.interceptError(response: nil, request: request, data: nil, error: error)
+            }
+            throw error
+        }
     }
 
     func createRequest(

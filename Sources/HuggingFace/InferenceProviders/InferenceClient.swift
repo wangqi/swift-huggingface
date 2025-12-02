@@ -65,15 +65,19 @@ public final class InferenceClient: Sendable {
     /// - Parameters:
     ///   - session: The underlying client session. Defaults to `URLSession(configuration: .default)`.
     ///   - userAgent: The value for the `User-Agent` header sent in requests, if any. Defaults to `nil`.
+    ///   - middlewares: The middlewares for intercepting HTTP requests and responses.
+    // wangqi 2025-12-02: Add middlewares parameter
     public convenience init(
         session: URLSession = URLSession(configuration: .default),
-        userAgent: String? = nil
+        userAgent: String? = nil,
+        middlewares: [HuggingFaceMiddleware] = []
     ) {
         self.init(
             session: session,
             host: Self.detectHost(),
             userAgent: userAgent,
-            tokenProvider: .environment
+            tokenProvider: .environment,
+            middlewares: middlewares
         )
     }
 
@@ -84,17 +88,21 @@ public final class InferenceClient: Sendable {
     ///   - host: The host URL to use for requests.
     ///   - userAgent: The value for the `User-Agent` header sent in requests, if any. Defaults to `nil`.
     ///   - bearerToken: The Bearer token for authentication, if any. Defaults to `nil`.
+    ///   - middlewares: The middlewares for intercepting HTTP requests and responses.
+    // wangqi 2025-12-02: Add middlewares parameter
     public convenience init(
         session: URLSession = URLSession(configuration: .default),
         host: URL,
         userAgent: String? = nil,
-        bearerToken: String? = nil
+        bearerToken: String? = nil,
+        middlewares: [HuggingFaceMiddleware] = []
     ) {
         self.init(
             session: session,
             host: host,
             userAgent: userAgent,
-            tokenProvider: bearerToken.map { .fixed(token: $0) } ?? .none
+            tokenProvider: bearerToken.map { .fixed(token: $0) } ?? .none,
+            middlewares: middlewares
         )
     }
 
@@ -105,17 +113,21 @@ public final class InferenceClient: Sendable {
     ///   - host: The host URL to use for requests.
     ///   - userAgent: The value for the `User-Agent` header sent in requests, if any. Defaults to `nil`.
     ///   - tokenProvider: The token provider for authentication.
+    ///   - middlewares: The middlewares for intercepting HTTP requests and responses.
+    // wangqi 2025-12-02: Add middlewares parameter
     public init(
         session: URLSession = URLSession(configuration: .default),
         host: URL,
         userAgent: String? = nil,
-        tokenProvider: TokenProvider
+        tokenProvider: TokenProvider,
+        middlewares: [HuggingFaceMiddleware] = []
     ) {
         self.httpClient = HTTPClient(
             host: host,
             userAgent: userAgent,
             tokenProvider: tokenProvider,
-            session: session
+            session: session,
+            middlewares: middlewares
         )
     }
 
