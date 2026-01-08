@@ -33,7 +33,7 @@ import Foundation
 /// checks in the following order:
 /// 1. `HF_HUB_CACHE` environment variable
 /// 2. `HF_HOME` environment variable + `/hub`
-/// 3. `~/.cache/huggingface/hub` (default)
+/// 3. `~/.cache/huggingface/hub` (macOS) or `Library/Caches/huggingface/hub` (other platforms)
 ///
 /// ## Usage
 ///
@@ -96,10 +96,16 @@ public struct HubCache: Sendable {
 
     /// The fallback cache directory when resolution fails.
     private static var fallbackDirectory: URL {
-        FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent(".cache")
-            .appendingPathComponent("huggingface")
-            .appendingPathComponent("hub")
+        #if os(macOS)
+            FileManager.default.homeDirectoryForCurrentUser
+                .appendingPathComponent(".cache")
+                .appendingPathComponent("huggingface")
+                .appendingPathComponent("hub")
+        #else
+            URL.cachesDirectory
+                .appendingPathComponent("huggingface")
+                .appendingPathComponent("hub")
+        #endif
     }
 
     // MARK: - Repository Path
