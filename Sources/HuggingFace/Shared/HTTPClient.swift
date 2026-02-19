@@ -71,7 +71,22 @@ final class HTTPClient: @unchecked Sendable {
         params: [String: Value]? = nil,
         headers: [String: String]? = nil
     ) async throws -> T {
-        let request = try createRequest(method, path, params: params, headers: headers)
+        let request = try await createRequest(method, path, params: params, headers: headers)
+
+        return try await performFetch(request: request)
+    }
+
+    func fetch<T: Decodable>(
+        _ method: HTTPMethod,
+        url: URL,
+        params: [String: Value]? = nil,
+        headers: [String: String]? = nil
+    ) async throws -> T {
+        let request = try await createRequest(method, url: url, params: params, headers: headers)
+        return try await performFetch(request: request)
+    }
+
+    private func performFetch<T: Decodable>(request: URLRequest) async throws -> T {
         let (data, response) = try await session.data(for: request)
         let httpResponse = try validateResponse(response, data: data)
 
@@ -98,14 +113,28 @@ final class HTTPClient: @unchecked Sendable {
         params: [String: Value]? = nil,
         headers: [String: String]? = nil
     ) async throws -> PaginatedResponse<T> {
-        let request = try createRequest(method, path, params: params, headers: headers)
+        guard let url = URL(string: path, relativeTo: host) else {
+            throw HTTPClientError.unexpectedError(
+                "Invalid URL for path '\(path)' relative to host '\(host)'"
+            )
+        }
+        return try await fetchPaginated(method, url: url, params: params, headers: headers)
+    }
+
+    func fetchPaginated<T: Decodable>(
+        _ method: HTTPMethod,
+        url: URL,
+        params: [String: Value]? = nil,
+        headers: [String: String]? = nil
+    ) async throws -> PaginatedResponse<T> {
+        let request = try await createRequest(method, url: url, params: params, headers: headers)
         let (data, response) = try await session.data(for: request)
         let httpResponse = try validateResponse(response, data: data)
 
         do {
             let items = try jsonDecoder.decode([T].self, from: data)
-            let nextURL = httpResponse.nextPageURL()
-            return PaginatedResponse(items: items, nextURL: nextURL)
+            let nextURL = parseNextPageURL(from: httpResponse)
+            return PaginatedResponse(items: items, nextURL: nextURL, requestURL: request.url)
         } catch {
             throw HTTPClientError.decodingError(
                 response: httpResponse,
@@ -120,45 +149,117 @@ final class HTTPClient: @unchecked Sendable {
         params: [String: Value]? = nil,
         headers: [String: String]? = nil
     ) -> AsyncThrowingStream<T, Swift.Error> {
+        performFetchStream(
+            method,
+            requestBuilder: { [self] in
+                try await self.createRequest(method, path, params: params, headers: headers)
+            }
+        )
+    }
+
+    func fetchStream<T: Decodable & Sendable>(
+        _ method: HTTPMethod,
+        url: URL,
+        params: [String: Value]? = nil,
+        headers: [String: String]? = nil
+    ) -> AsyncThrowingStream<T, Swift.Error> {
+        performFetchStream(
+            method,
+            requestBuilder: { [self] in
+                try await self.createRequest(method, url: url, params: params, headers: headers)
+            }
+        )
+    }
+
+    private func performFetchStream<T: Decodable & Sendable>(
+        _ method: HTTPMethod,
+        requestBuilder: @escaping @Sendable () async throws -> URLRequest
+    ) -> AsyncThrowingStream<T, Swift.Error> {
         AsyncThrowingStream { @Sendable continuation in
             let task = Task {
                 do {
-                    let request = try createRequest(method, path, params: params, headers: headers)
-                    let (bytes, response) = try await session.bytes(for: request)
-                    let httpResponse = try validateResponse(response)
+                    let request = try await requestBuilder()
 
-                    guard (200 ..< 300).contains(httpResponse.statusCode) else {
-                        var errorData = Data()
-                        for try await byte in bytes {
-                            errorData.append(byte)
+                    #if canImport(FoundationNetworking)
+                        // Linux: Use buffered approach since true streaming is not available
+                        let (data, response) = try await session.data(for: request)
+                        let httpResponse = try validateResponse(response, data: data)
+
+                        guard (200 ..< 300).contains(httpResponse.statusCode) else {
+                            return
                         }
-                        // validateResponse will throw the appropriate error
-                        _ = try validateResponse(response, data: errorData)
-                        return  // This line will never be reached, but satisfies the compiler
-                    }
 
-                    for try await event in bytes.events {
-                        // Check for [DONE] signal
-                        if event.data.trimmingCharacters(in: .whitespacesAndNewlines) == "[DONE]" {
+                        // Parse SSE events from the buffered response
+                        guard let responseString = String(data: data, encoding: .utf8) else {
                             continuation.finish()
                             return
                         }
 
-                        guard let jsonData = event.data.data(using: .utf8) else {
-                            continue
+                        for line in responseString.components(separatedBy: "\n") {
+                            let trimmed = line.trimmingCharacters(in: .whitespaces)
+                            guard trimmed.hasPrefix("data:") else { continue }
+
+                            let eventData = String(trimmed.dropFirst(5)).trimmingCharacters(
+                                in: .whitespaces
+                            )
+
+                            // Check for [DONE] signal
+                            if eventData == "[DONE]" {
+                                continuation.finish()
+                                return
+                            }
+
+                            guard let jsonData = eventData.data(using: .utf8) else {
+                                continue
+                            }
+
+                            do {
+                                let decoded = try jsonDecoder.decode(T.self, from: jsonData)
+                                continuation.yield(decoded)
+                            } catch {
+                                print("Warning: Failed to decode streaming response chunk: \(error)")
+                            }
                         }
 
-                        do {
-                            let decoded = try jsonDecoder.decode(T.self, from: jsonData)
-                            continuation.yield(decoded)
-                        } catch {
-                            // Log decoding errors but don't fail the stream
-                            // This allows the stream to continue even if individual chunks fail
-                            print("Warning: Failed to decode streaming response chunk: \(error)")
-                        }
-                    }
+                        continuation.finish()
+                    #else
+                        // Apple platforms: Use native streaming APIs
+                        let (bytes, response) = try await session.bytes(for: request)
+                        let httpResponse = try validateResponse(response)
 
-                    continuation.finish()
+                        guard (200 ..< 300).contains(httpResponse.statusCode) else {
+                            var errorData = Data()
+                            for try await byte in bytes {
+                                errorData.append(byte)
+                            }
+                            // validateResponse will throw the appropriate error
+                            _ = try validateResponse(response, data: errorData)
+                            return  // This line will never be reached, but satisfies the compiler
+                        }
+
+                        for try await event in bytes.events {
+                            // Check for [DONE] signal
+                            if event.data.trimmingCharacters(in: .whitespacesAndNewlines) == "[DONE]" {
+                                continuation.finish()
+                                return
+                            }
+
+                            guard let jsonData = event.data.data(using: .utf8) else {
+                                continue
+                            }
+
+                            do {
+                                let decoded = try jsonDecoder.decode(T.self, from: jsonData)
+                                continuation.yield(decoded)
+                            } catch {
+                                // Log decoding errors but don't fail the stream
+                                // This allows the stream to continue even if individual chunks fail
+                                print("Warning: Failed to decode streaming response chunk: \(error)")
+                            }
+                        }
+
+                        continuation.finish()
+                    #endif
                 } catch {
                     continuation.finish(throwing: error)
                 }
@@ -176,7 +277,21 @@ final class HTTPClient: @unchecked Sendable {
         params: [String: Value]? = nil,
         headers: [String: String]? = nil
     ) async throws -> Data {
-        let request = try createRequest(method, path, params: params, headers: headers)
+        let request = try await createRequest(method, path, params: params, headers: headers)
+        return try await performFetchData(request: request)
+    }
+
+    func fetchData(
+        _ method: HTTPMethod,
+        url: URL,
+        params: [String: Value]? = nil,
+        headers: [String: String]? = nil
+    ) async throws -> Data {
+        let request = try await createRequest(method, url: url, params: params, headers: headers)
+        return try await performFetchData(request: request)
+    }
+
+    private func performFetchData(request: URLRequest) async throws -> Data {
         let (data, response) = try await session.data(for: request)
         let _ = try validateResponse(response, data: data)
 
@@ -188,9 +303,31 @@ final class HTTPClient: @unchecked Sendable {
         _ path: String,
         params: [String: Value]? = nil,
         headers: [String: String]? = nil
-    ) throws -> URLRequest {
+    ) async throws -> URLRequest {
         var urlComponents = URLComponents(url: host, resolvingAgainstBaseURL: true)
         urlComponents?.path = path
+
+        return try await createRequest(method, urlComponents: urlComponents, params: params, headers: headers)
+    }
+
+    func createRequest(
+        _ method: HTTPMethod,
+        url: URL,
+        params: [String: Value]? = nil,
+        headers: [String: String]? = nil
+    ) async throws -> URLRequest {
+        let urlComponents = URLComponents(url: url, resolvingAgainstBaseURL: true)
+
+        return try await createRequest(method, urlComponents: urlComponents, params: params, headers: headers)
+    }
+
+    private func createRequest(
+        _ method: HTTPMethod,
+        urlComponents: URLComponents?,
+        params: [String: Value]? = nil,
+        headers: [String: String]? = nil
+    ) async throws -> URLRequest {
+        var urlComponents = urlComponents
 
         var httpBody: Data? = nil
         switch method {
@@ -218,7 +355,7 @@ final class HTTPClient: @unchecked Sendable {
 
         guard let url = urlComponents?.url else {
             throw HTTPClientError.requestError(
-                #"Unable to construct URL with host "\#(host)" and path "\#(path)""#
+                #"Unable to construct URL from components \#(String(describing: urlComponents))"#
             )
         }
         var request: URLRequest = URLRequest(url: url)
@@ -230,7 +367,7 @@ final class HTTPClient: @unchecked Sendable {
         }
 
         // Get authentication token from provider
-        if let token = try tokenProvider.getToken() {
+        if let token = try await tokenProvider.getToken() {
             request.addValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         }
 

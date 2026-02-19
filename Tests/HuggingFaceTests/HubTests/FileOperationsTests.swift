@@ -1,9 +1,45 @@
 import Foundation
+
+#if canImport(FoundationNetworking)
+    import FoundationNetworking
+#endif
 import Testing
 
 @testable import HuggingFace
 
 #if swift(>=6.1)
+    private final class ProgressCallCounter: @unchecked Sendable {
+        private let lock = NSLock()
+        private var _count = 0
+        var count: Int {
+            lock.lock()
+            defer { lock.unlock() }
+            return _count
+        }
+        func increment() {
+            lock.lock()
+            _count += 1
+            lock.unlock()
+        }
+    }
+
+    private final class ProgressValueRecorder: @unchecked Sendable {
+        private let lock = NSLock()
+        private var _values: [Double] = []
+
+        func append(_ value: Double) {
+            lock.lock()
+            _values.append(value)
+            lock.unlock()
+        }
+
+        var values: [Double] {
+            lock.lock()
+            defer { lock.unlock() }
+            return _values
+        }
+    }
+
     @Suite("File Operations Tests", .serialized)
     struct FileOperationsTests {
         func createMockClient(bearerToken: String? = "test_token") -> HubClient {
@@ -46,7 +82,7 @@ import Testing
             await MockURLProtocol.setHandler { request in
                 #expect(request.url?.path == "/api/models/facebook/bart-large/tree/main")
                 #expect(request.url?.query?.contains("recursive=true") == true)
-                #expect(request.httpMethod == "GET")
+                #expect(request.httpMethod == "GET" || request.httpMethod == "HEAD")
 
                 let response = HTTPURLResponse(
                     url: request.url!,
@@ -240,7 +276,7 @@ import Testing
 
             await MockURLProtocol.setHandler { request in
                 #expect(request.url?.path == "/user/model/resolve/main/test.txt")
-                #expect(request.httpMethod == "GET")
+                #expect(request.httpMethod == "GET" || request.httpMethod == "HEAD")
 
                 let response = HTTPURLResponse(
                     url: request.url!,
@@ -276,8 +312,150 @@ import Testing
 
             let client = createMockClient()
             let repoID: Repo.ID = "user/model"
-            _ = try await client.downloadContentsOfFile(at: "test.txt", from: repoID, useRaw: true)
+            _ = try await client.downloadContentsOfFile(at: "test.txt", from: repoID, endpoint: .raw)
         }
+
+        #if !canImport(FoundationNetworking)
+            // Disabled on Linux: FoundationNetworking URLProtocol client can crash during finishLoading.
+            @Test("downloadSnapshot invokes progressHandler during file download", .mockURLSession)
+            func testDownloadSnapshotProgressHandlerCalledDuringDownload() async throws {
+                let listResponse = """
+                    [
+                        {"path": "large.bin", "type": "file", "oid": "abc", "size": 500}
+                    ]
+                    """
+                let fileBody = Data(repeating: 0xAB, count: 500)
+
+                MockURLProtocol.setChunkSize(100)
+                await MockURLProtocol.setHandler { request in
+                    let path = request.url?.path ?? ""
+                    if path.contains("/api/models/user/model/tree/") {
+                        let response = HTTPURLResponse(
+                            url: request.url!,
+                            statusCode: 200,
+                            httpVersion: "HTTP/1.1",
+                            headerFields: ["Content-Type": "application/json"]
+                        )!
+                        return (response, Data(listResponse.utf8))
+                    }
+                    if path == "/user/model/resolve/main/large.bin" {
+                        let response = HTTPURLResponse(
+                            url: request.url!,
+                            statusCode: 200,
+                            httpVersion: "HTTP/1.1",
+                            headerFields: ["Content-Type": "application/octet-stream"]
+                        )!
+                        return (response, fileBody)
+                    }
+                    let response = HTTPURLResponse(
+                        url: request.url!,
+                        statusCode: 404,
+                        httpVersion: "HTTP/1.1",
+                        headerFields: [:]
+                    )!
+                    return (response, Data())
+                }
+
+                let callCount = ProgressCallCounter()
+                let client = createMockClient()
+                let destination = FileManager.default.temporaryDirectory
+                    .appendingPathComponent(UUID().uuidString, isDirectory: true)
+
+                let result = try await client.downloadSnapshot(
+                    of: "user/model",
+                    kind: .model,
+                    to: destination,
+                    revision: "main",
+                    matching: [],
+                    progressHandler: { _ in callCount.increment() }
+                )
+
+                #expect(result == destination)
+                #if canImport(FoundationNetworking)
+                    let minimumExpectedCalls = 2
+                #else
+                    let minimumExpectedCalls = 3
+                #endif
+                #expect(
+                    callCount.count >= minimumExpectedCalls,
+                    "progressHandler should be called at least \(minimumExpectedCalls) times; got \(callCount.count)"
+                )
+
+                try? FileManager.default.removeItem(at: destination)
+            }
+        #endif
+
+        #if !canImport(FoundationNetworking)
+            // Disabled on Linux: FoundationNetworking URLProtocol client can crash during finishLoading.
+            @Test("downloadSnapshot progress does not regress", .mockURLSession)
+            func testDownloadSnapshotProgressDoesNotRegress() async throws {
+                let listResponse = """
+                    [
+                        {"path": "large.bin", "type": "file", "oid": "abc", "size": 500}
+                    ]
+                    """
+                let fileBody = Data(repeating: 0xAB, count: 500)
+
+                MockURLProtocol.setChunkSize(100)
+                await MockURLProtocol.setHandler { request in
+                    let path = request.url?.path ?? ""
+                    if path.contains("/api/models/user/model/tree/") {
+                        let response = HTTPURLResponse(
+                            url: request.url!,
+                            statusCode: 200,
+                            httpVersion: "HTTP/1.1",
+                            headerFields: ["Content-Type": "application/json"]
+                        )!
+                        return (response, Data(listResponse.utf8))
+                    }
+                    if path == "/user/model/resolve/main/large.bin" {
+                        let response = HTTPURLResponse(
+                            url: request.url!,
+                            statusCode: 200,
+                            httpVersion: "HTTP/1.1",
+                            headerFields: ["Content-Type": "application/octet-stream"]
+                        )!
+                        return (response, fileBody)
+                    }
+                    let response = HTTPURLResponse(
+                        url: request.url!,
+                        statusCode: 404,
+                        httpVersion: "HTTP/1.1",
+                        headerFields: [:]
+                    )!
+                    return (response, Data())
+                }
+
+                let recorder = ProgressValueRecorder()
+                let client = createMockClient()
+                let destination = FileManager.default.temporaryDirectory
+                    .appendingPathComponent(UUID().uuidString, isDirectory: true)
+
+                let result = try await client.downloadSnapshot(
+                    of: "user/model",
+                    kind: .model,
+                    to: destination,
+                    revision: "main",
+                    matching: [],
+                    progressHandler: { progress in
+                        recorder.append(progress.fractionCompleted)
+                    }
+                )
+
+                #expect(result == destination)
+                let values = recorder.values
+                #expect(values.isEmpty == false)
+                for index in 1 ..< values.count {
+                    #expect(
+                        values[index] >= values[index - 1],
+                        "progress fraction should be non-decreasing"
+                    )
+                }
+                #expect(values.last ?? 0.0 >= 1.0 - 0.0001)
+
+                try? FileManager.default.removeItem(at: destination)
+            }
+        #endif
 
         // MARK: - Delete Tests
 

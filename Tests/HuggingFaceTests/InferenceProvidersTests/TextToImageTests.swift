@@ -1,6 +1,10 @@
 import Foundation
 import Testing
 
+#if canImport(FoundationNetworking)
+    import FoundationNetworking
+#endif
+
 @testable import HuggingFace
 
 #if swift(>=6.1)
@@ -97,7 +101,7 @@ import Testing
                 if let body = request.httpBody {
                     let json = try JSONSerialization.jsonObject(with: body) as! [String: Any]
                     #expect(json["model"] as? String == "stabilityai/stable-diffusion-xl-base-1.0")
-                    #expect(json["prompt"] as? String == "A beautiful sunset over mountains")
+                    #expect(json["prompt"] as? String == "A futuristic city")
                 }
 
                 #expect(request.url?.path == "/v1/images/generations")
@@ -167,7 +171,7 @@ import Testing
                 if let body = request.httpBody {
                     let json = try JSONSerialization.jsonObject(with: body) as! [String: Any]
                     #expect(json["model"] as? String == "stabilityai/stable-diffusion-xl-base-1.0")
-                    #expect(json["prompt"] as? String == "A beautiful sunset over mountains")
+                    #expect(json["prompt"] as? String == "A stunning anime character")
                 }
 
                 #expect(request.url?.path == "/v1/images/generations")
@@ -190,7 +194,7 @@ import Testing
 
             let result = try await client.textToImage(
                 model: "stabilityai/stable-diffusion-xl-base-1.0",
-                prompt: "A beautiful anime character",
+                prompt: "A stunning anime character",
                 loras: loras
             )
 
@@ -222,7 +226,7 @@ import Testing
                 if let body = request.httpBody {
                     let json = try JSONSerialization.jsonObject(with: body) as! [String: Any]
                     #expect(json["model"] as? String == "stabilityai/stable-diffusion-xl-base-1.0")
-                    #expect(json["prompt"] as? String == "A beautiful sunset over mountains")
+                    #expect(json["prompt"] as? String == "A detailed architectural drawing")
                 }
 
                 #expect(request.url?.path == "/v1/images/generations")
@@ -281,7 +285,7 @@ import Testing
                 if let body = request.httpBody {
                     let json = try JSONSerialization.jsonObject(with: body) as! [String: Any]
                     #expect(json["model"] as? String == "stabilityai/stable-diffusion-xl-base-1.0")
-                    #expect(json["prompt"] as? String == "A beautiful sunset over mountains")
+                    #expect(json["prompt"] as? String == "A wide landscape view")
                 }
                 #expect(request.url?.path == "/v1/images/generations")
                 #expect(request.httpMethod == "POST")
@@ -386,7 +390,7 @@ import Testing
                 if let body = request.httpBody {
                     let json = try JSONSerialization.jsonObject(with: body) as! [String: Any]
                     #expect(json["model"] as? String == "stabilityai/stable-diffusion-xl-base-1.0")
-                    #expect(json["prompt"] as? String == "A beautiful sunset over mountains")
+                    #expect(json["prompt"] as? String == "High resolution artwork")
                 }
                 #expect(request.url?.path == "/v1/images/generations")
                 #expect(request.httpMethod == "POST")

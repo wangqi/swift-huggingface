@@ -1,60 +1,79 @@
 import Foundation
 import Testing
 
+#if canImport(FoundationNetworking)
+    import FoundationNetworking
+#endif
+
 @testable import HuggingFace
 
 // MARK: - Request Handler Storage
 
 /// Stores and manages handlers for MockURLProtocol's request handling.
-private actor RequestHandlerStorage {
-    private var requestHandler: (@Sendable (URLRequest) async throws -> (HTTPURLResponse, Data))?
-    private var isLocked = false
+private final class RequestHandlerStorage: @unchecked Sendable {
+    private let lock = NSLock()
+    private var requestHandler: (@Sendable (URLRequest) throws -> (HTTPURLResponse, Data))?
+    private var chunkSize: Int?
 
     func setHandler(
-        _ handler: @Sendable @escaping (URLRequest) async throws -> (HTTPURLResponse, Data)
-    ) async {
-        // Wait for any existing handler to be released
-        while isLocked {
-            try? await Task.sleep(for: .milliseconds(10))
-        }
+        _ handler: @Sendable @escaping (URLRequest) throws -> (HTTPURLResponse, Data)
+    ) {
+        lock.lock()
         requestHandler = handler
-        isLocked = true
+        lock.unlock()
     }
 
-    func clearHandler() async {
+    func clearHandler() {
+        lock.lock()
         requestHandler = nil
-        isLocked = false
+        lock.unlock()
     }
 
-    func executeHandler(for request: URLRequest) async throws -> (HTTPURLResponse, Data) {
-        guard let handler = requestHandler else {
+    func setChunkSize(_ size: Int?) {
+        lock.lock()
+        chunkSize = size
+        lock.unlock()
+    }
+
+    func executeHandler(for request: URLRequest) throws -> (HTTPURLResponse, Data) {
+        lock.lock()
+        let handler = requestHandler
+        lock.unlock()
+
+        guard let handler else {
             throw NSError(
                 domain: "MockURLProtocolError",
                 code: 0,
                 userInfo: [NSLocalizedDescriptionKey: "No request handler set"]
             )
         }
-        return try await handler(request)
+        return try handler(request)
+    }
+
+    func currentChunkSize() -> Int? {
+        lock.lock()
+        defer { lock.unlock() }
+        return chunkSize
     }
 }
 
 // MARK: - Mock URL Protocol
 
 /// Custom URLProtocol for testing network requests
-final class MockURLProtocol: URLProtocol, @unchecked Sendable {
+final class MockURLProtocol: URLProtocol {
     /// Storage for request handlers
     fileprivate static let requestHandlerStorage = RequestHandlerStorage()
 
     /// Set a handler to process mock requests
     static func setHandler(
-        _ handler: @Sendable @escaping (URLRequest) async throws -> (HTTPURLResponse, Data)
+        _ handler: @Sendable @escaping (URLRequest) throws -> (HTTPURLResponse, Data)
     ) async {
-        await requestHandlerStorage.setHandler(handler)
+        requestHandlerStorage.setHandler(handler)
     }
 
-    /// Execute the stored handler for a request
-    func executeHandler(for request: URLRequest) async throws -> (HTTPURLResponse, Data) {
-        return try await Self.requestHandlerStorage.executeHandler(for: request)
+    /// When set, the next handler's response body is sent in chunks of this size (for progress tests).
+    static func setChunkSize(_ size: Int?) {
+        requestHandlerStorage.setChunkSize(size)
     }
 
     override class func canInit(with request: URLRequest) -> Bool {
@@ -66,15 +85,35 @@ final class MockURLProtocol: URLProtocol, @unchecked Sendable {
     }
 
     override func startLoading() {
-        Task {
-            do {
-                let (response, data) = try await self.executeHandler(for: request)
-                client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
-                client?.urlProtocol(self, didLoad: data)
-                client?.urlProtocolDidFinishLoading(self)
-            } catch {
-                client?.urlProtocol(self, didFailWithError: error)
-            }
+        do {
+            let (response, data) = try Self.requestHandlerStorage.executeHandler(for: self.request)
+            self.client?.urlProtocol(
+                self,
+                didReceive: response,
+                cacheStoragePolicy: .notAllowed
+            )
+            #if canImport(FoundationNetworking)
+                // FoundationNetworking's URLProtocol client is not stable with chunked delivery.
+                self.client?.urlProtocol(self, didLoad: data)
+            #else
+                if let chunkSize = Self.requestHandlerStorage.currentChunkSize(),
+                    chunkSize > 0,
+                    data.count > chunkSize
+                {
+                    var offset = 0
+                    while offset < data.count {
+                        let end = min(offset + chunkSize, data.count)
+                        let chunk = data.subdata(in: offset ..< end)
+                        offset = end
+                        self.client?.urlProtocol(self, didLoad: chunk)
+                    }
+                } else {
+                    self.client?.urlProtocol(self, didLoad: data)
+                }
+            #endif
+            self.client?.urlProtocolDidFinishLoading(self)
+        } catch {
+            self.client?.urlProtocol(self, didFailWithError: error)
         }
     }
 
@@ -90,36 +129,41 @@ final class MockURLProtocol: URLProtocol, @unchecked Sendable {
     ///
     /// Provides mutual exclusion across async test execution to prevent
     /// interference between parallel test suites using shared mock handlers.
-    ///
-    /// Note: We can't use `NSLock` or `OSAllocatedUnfairLock` here because:
-    /// - They're synchronous locks designed for very short critical sections
-    /// - They block threads (bad for Swift concurrency's cooperative thread pool)
-    /// - They can't be held across suspension points (await calls)
-    ///
-    /// An actor-based lock is idiomatic for Swift's async/await model.
     private actor MockURLProtocolLock {
         static let shared = MockURLProtocolLock()
 
+        private var waiters: [CheckedContinuation<Void, Never>] = []
         private var isLocked = false
 
         private init() {}
 
-        func withLock<T: Sendable>(_ operation: @Sendable () async throws -> T) async rethrows -> T {
-            // Wait for lock to be available
-            while isLocked {
-                try? await Task.sleep(for: .milliseconds(10))
+        func acquire() async {
+            if isLocked {
+                await withCheckedContinuation { continuation in
+                    waiters.append(continuation)
+                }
+            } else {
+                isLocked = true
             }
+        }
 
-            // Acquire lock
-            isLocked = true
+        func release() {
+            if let next = waiters.first {
+                waiters.removeFirst()
+                next.resume()
+            } else {
+                isLocked = false
+            }
+        }
 
-            // Execute operation and ensure lock is released even on error
+        func withLock<T: Sendable>(_ operation: @Sendable () async throws -> T) async rethrows -> T {
+            await acquire()
             do {
                 let result = try await operation()
-                isLocked = false
+                release()
                 return result
             } catch {
-                isLocked = false
+                release()
                 throw error
             }
         }
@@ -134,14 +178,18 @@ final class MockURLProtocol: URLProtocol, @unchecked Sendable {
         ) async throws {
             // Serialize all MockURLProtocol tests to prevent interference
             try await MockURLProtocolLock.shared.withLock {
-                // Clear handler before test
-                await MockURLProtocol.requestHandlerStorage.clearHandler()
+                // Clear handler and chunk size before test
+                MockURLProtocol.requestHandlerStorage.clearHandler()
+                MockURLProtocol.requestHandlerStorage.setChunkSize(nil)
+
+                defer {
+                    // Always reset state even if the test throws
+                    MockURLProtocol.requestHandlerStorage.clearHandler()
+                    MockURLProtocol.requestHandlerStorage.setChunkSize(nil)
+                }
 
                 // Execute the test
                 try await function()
-
-                // Clear handler after test
-                await MockURLProtocol.requestHandlerStorage.clearHandler()
             }
         }
     }
