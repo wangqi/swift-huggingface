@@ -443,7 +443,7 @@ public extension HubClient {
             if let progress {
                 progress.completedUnitCount = progress.totalUnitCount
             }
-            return try copyFileToLocalDirectoryIfNeeded(cachedPath, repoPath: repoPath, destination: destination)
+            return try copyFileToDestinationIfNeeded(cachedPath, destination: destination)
         }
         if localFilesOnly {
             throw HubCacheError.cachedPathResolutionFailed(repoPath)
@@ -503,9 +503,8 @@ public extension HubClient {
                     if let progress {
                         progress.completedUnitCount = progress.totalUnitCount
                     }
-                    return try copyFileToLocalDirectoryIfNeeded(
+                    return try copyFileToDestinationIfNeeded(
                         cachedPath,
-                        repoPath: repoPath,
                         destination: destination
                     )
                 }
@@ -513,9 +512,8 @@ public extension HubClient {
                     if let progress {
                         progress.completedUnitCount = progress.totalUnitCount
                     }
-                    return try copyFileToLocalDirectoryIfNeeded(
+                    return try copyFileToDestinationIfNeeded(
                         blobPath,
-                        repoPath: repoPath,
                         destination: destination
                     )
                 }
@@ -550,9 +548,8 @@ public extension HubClient {
                             revision: revision,
                             filename: repoPath
                         ) {
-                            return try copyFileToLocalDirectoryIfNeeded(
+                            return try copyFileToDestinationIfNeeded(
                                 fallback,
-                                repoPath: repoPath,
                                 destination: destination
                             )
                         }
@@ -638,9 +635,8 @@ public extension HubClient {
                             revision: commitHash,
                             filename: repoPath
                         ) {
-                            return try copyFileToLocalDirectoryIfNeeded(
+                            return try copyFileToDestinationIfNeeded(
                                 cachedPath,
-                                repoPath: repoPath,
                                 destination: destination
                             )
                         }
@@ -688,7 +684,7 @@ public extension HubClient {
                     filename: repoPath
                 )
             {
-                return try copyFileToLocalDirectoryIfNeeded(fallback, repoPath: repoPath, destination: destination)
+                return try copyFileToDestinationIfNeeded(fallback, destination: destination)
             }
             throw error
         }
@@ -724,9 +720,8 @@ public extension HubClient {
                 revision: commitHash,
                 filename: repoPath
             ) {
-                return try copyFileToLocalDirectoryIfNeeded(
+                return try copyFileToDestinationIfNeeded(
                     cachedPath,
-                    repoPath: repoPath,
                     destination: destination
                 )
             }
@@ -1531,24 +1526,34 @@ private extension HubClient {
         return try? JSONDecoder().decode(CachedSnapshotMetadata.self, from: data)
     }
 
-    /// Copies a file to a local directory if needed.
-    func copyFileToLocalDirectoryIfNeeded(
+    /// Copies a file to a local destination path if needed.
+    func copyFileToDestinationIfNeeded(
         _ source: URL,
-        repoPath: String,
         destination: URL?
     ) throws -> URL {
         guard let destination else {
             return source
         }
-        let target = destination.appendingPathComponent(repoPath)
-        try FileManager.default.createDirectory(
-            at: target.deletingLastPathComponent(),
+        let fileManager = FileManager.default
+        if destination.hasDirectoryPath {
+            throw HubCacheError.invalidFileDestination(destination.path)
+        }
+        var isDirectory: ObjCBool = false
+        if fileManager.fileExists(atPath: destination.path, isDirectory: &isDirectory), isDirectory.boolValue {
+            throw HubCacheError.invalidFileDestination(destination.path)
+        }
+        let resolvedSource = source.resolvingSymlinksInPath().standardizedFileURL
+        let resolvedDestination = destination.resolvingSymlinksInPath().standardizedFileURL
+        if resolvedSource == resolvedDestination {
+            return destination
+        }
+        try fileManager.createDirectory(
+            at: destination.deletingLastPathComponent(),
             withIntermediateDirectories: true
         )
-        try? FileManager.default.removeItem(at: target)
-        let resolvedSource = source.resolvingSymlinksInPath()
-        try FileManager.default.copyItem(at: resolvedSource, to: target)
-        return target
+        try? fileManager.removeItem(at: destination)
+        try fileManager.copyItem(at: resolvedSource, to: destination)
+        return destination
     }
 
     /// Copies a snapshot to a local directory if needed.
