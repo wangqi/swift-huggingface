@@ -111,24 +111,30 @@ public enum ChatCompletion {
         /// Optional tool call ID for tool messages.
         public let toolCallId: String?
 
+        /// Reasoning content for providers that use a separate reasoning field (e.g. minimax reasoning_content)
+        public let reasoningContent: String?
+
         /// Creates a new message.
         ///
         /// - Parameters:
         ///   - role: The role of the message sender.
         ///   - content: The content of the message.
         ///   - name: Optional name for the message sender.
+        ///   - reasoningContent: Optional reasoning content from the model.
         ///   - toolCalls: Optional tool calls made by the assistant.
         ///   - toolCallId: Optional tool call ID for tool messages.
         public init(
             role: Role,
             content: Content,
             name: String? = nil,
+            reasoningContent: String? = nil,
             toolCalls: [ToolCall]? = nil,
             toolCallId: String? = nil
         ) {
             self.role = role
             self.content = content
             self.name = name
+            self.reasoningContent = reasoningContent
             self.toolCalls = toolCalls
             self.toolCallId = toolCallId
         }
@@ -139,6 +145,7 @@ public enum ChatCompletion {
         ///   - role: The role of the message sender.
         ///   - content: Optional content of the message.
         ///   - name: Optional name for the message sender.
+        ///   - reasoningContent: Optional reasoning content from the model.
         ///   - toolCalls: Optional tool calls made by the assistant.
         ///   - toolCallId: Optional tool call ID for tool messages.
         // wangqi 2025-12-02: Changed from internal to public to allow creating assistant messages with tool calls
@@ -146,12 +153,14 @@ public enum ChatCompletion {
             role: Role,
             content: Content? = nil,
             name: String? = nil,
+            reasoningContent: String? = nil,
             toolCalls: [ToolCall]? = nil,
             toolCallId: String? = nil
         ) {
             self.role = role
             self.content = content
             self.name = name
+            self.reasoningContent = reasoningContent
             self.toolCalls = toolCalls
             self.toolCallId = toolCallId
         }
@@ -162,6 +171,7 @@ public enum ChatCompletion {
             case name
             case toolCalls = "tool_calls"
             case toolCallId = "tool_call_id"
+            case reasoningContent = "reasoning_content"
         }
 
         public init(from decoder: Decoder) throws {
@@ -181,6 +191,7 @@ public enum ChatCompletion {
             name = try container.decodeIfPresent(String.self, forKey: .name)
             toolCalls = try container.decodeIfPresent([ToolCall].self, forKey: .toolCalls)
             toolCallId = try container.decodeIfPresent(String.self, forKey: .toolCallId)
+            reasoningContent = try container.decodeIfPresent(String.self, forKey: .reasoningContent)
         }
 
         public init(stringLiteral value: String) {
@@ -210,12 +221,14 @@ public enum ChatCompletion {
         let content: Message.Content?
         let toolCalls: [Message.ToolCall]?
         let toolCallId: String?
+        let reasoningContent: String?
 
         private enum CodingKeys: String, CodingKey {
             case role
             case content
             case toolCalls = "tool_calls"
             case toolCallId = "tool_call_id"
+            case reasoningContent = "reasoning_content"
         }
     }
 
@@ -313,6 +326,7 @@ public enum ChatCompletion {
                 message = ChatCompletion.Message(
                     role: delta.role ?? .assistant,
                     content: delta.content,
+                    reasoningContent: delta.reasoningContent,
                     toolCalls: delta.toolCalls,
                     toolCallId: delta.toolCallId
                 )
