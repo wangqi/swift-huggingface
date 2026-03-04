@@ -215,11 +215,26 @@ public enum ChatCompletion {
         }
     }
 
+    /// A streaming tool call delta for accumulating partial tool call info across SSE chunks.
+    /// MiniMax and similar providers send tool call name and arguments in separate chunks.
+    /// All fields are optional so chunks with partial data (name-only or args-only) decode correctly.
+    public struct ToolCallDelta: Codable, Hashable, Sendable {
+        public let index: Int
+        public let id: String?
+        public let type: String?
+        public let function: FunctionDelta?
+
+        public struct FunctionDelta: Codable, Hashable, Sendable {
+            public let name: String?
+            public let arguments: String?
+        }
+    }
+
     /// Internal type for streaming delta messages
     private struct DeltaMessage: Codable {
         let role: Message.Role?
         let content: Message.Content?
-        let toolCalls: [Message.ToolCall]?
+        let toolCalls: [ToolCallDelta]?
         let toolCallId: String?
         let reasoningContent: String?
 
@@ -306,6 +321,10 @@ public enum ChatCompletion {
         /// The log probabilities for the choice.
         public let logprobs: LogProbs?
 
+        /// Streaming tool call deltas, populated only in SSE streaming responses.
+        /// Use this (not message.toolCalls) to accumulate tool calls across delta chunks.
+        public let toolCallDeltas: [ToolCallDelta]?
+
         private enum CodingKeys: String, CodingKey {
             case index
             case message
@@ -321,15 +340,18 @@ public enum ChatCompletion {
             // Try to decode message first, if not present try delta (streaming responses)
             if let decodedMessage = try? container.decode(ChatCompletion.Message.self, forKey: .message) {
                 message = decodedMessage
+                toolCallDeltas = nil
             } else if let delta = try? container.decode(DeltaMessage.self, forKey: .delta) {
-                // Build a Message from a delta; default to assistant role for streaming
+                // Build a Message from a delta; default to assistant role for streaming.
+                // Note: toolCalls is nil here — use toolCallDeltas for streaming tool call accumulation.
                 message = ChatCompletion.Message(
                     role: delta.role ?? .assistant,
                     content: delta.content,
                     reasoningContent: delta.reasoningContent,
-                    toolCalls: delta.toolCalls,
+                    toolCalls: nil,
                     toolCallId: delta.toolCallId
                 )
+                toolCallDeltas = delta.toolCalls
             } else {
                 throw DecodingError.keyNotFound(
                     CodingKeys.message,
