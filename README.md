@@ -19,7 +19,7 @@ Add the following to your `Package.swift`:
 
 ```swift
 dependencies: [
-    .package(url: "https://github.com/huggingface/swift-huggingface.git", from: "0.5.0")
+    .package(url: "https://github.com/huggingface/swift-huggingface.git", from: "0.8.0")
 ]
 ```
 
@@ -77,6 +77,33 @@ import HuggingFace
 
 // Create a client (uses auto-detected credentials from environment)
 let client = HubClient.default
+```
+
+#### Cache Location
+
+Downloaded Hub files are cached in a Python-compatible directory using this order:
+
+1. `HF_HUB_CACHE`
+2. `HF_HOME/hub`
+3. Default location:
+   - non-sandboxed macOS: `~/.cache/huggingface/hub`
+   - sandboxed Apple apps and other platforms: `Library/Caches/huggingface/hub`
+
+In sandboxed apps,
+the default cache is app-scoped rather than shared globally.
+To use a shared or custom location,
+set `HF_HUB_CACHE` / `HF_HOME`,
+or pass an explicit cache:
+
+```swift
+let cache = HubCache(location: .fixed(directory: myCacheURL))
+let client = HubClient(cache: cache)
+```
+
+To disable caching entirely:
+
+```swift
+let client = HubClient(cache: nil)
 ```
 
 #### Models
@@ -512,7 +539,7 @@ let destination = try await client.downloadSnapshot(
     to: snapshotDir,
     revision: "main",
     progressHandler: { progress in
-        print("Downloaded \(progress.completedUnitCount) of \(progress.totalUnitCount) files")
+        print("Downloaded \(progress.completedUnitCount) of \(progress.totalUnitCount) weighted units")
     }
 )
 print("Repository downloaded to: \(destination.path)")
@@ -527,6 +554,15 @@ let destination = try await client.downloadSnapshot(
     }
 )
 ```
+
+> [!NOTE]
+> Snapshot progress uses size-weighted units.
+> When file sizes are known from the tree listing response,
+> units correspond to bytes,
+> so `fractionCompleted` approximates overall bytes downloaded.
+> If a file size is unknown at scheduling time,
+> a small fallback unit is used,
+> and that file's weight remains fixed for the download.
 
 #### User Access Management
 
@@ -656,6 +692,7 @@ do {
 <summary>Hub API Endpoint Coverage</summary>
 
 ##### Collections
+
 - [x] `GET /api/collections` → `listCollections()`
 - [x] `GET /api/collections/{namespace}/{slug}-{id}` → `getCollection()`
 - [x] `POST /api/collections/{namespace}/{slug}-{id}/items` → `addCollectionItem()`
@@ -663,6 +700,7 @@ do {
 - [x] `DELETE /api/collections/{namespace}/{slug}-{id}/items/{itemId}` → `deleteCollectionItem()`
 
 ##### Datasets
+
 - [x] `GET /api/datasets` → `listDatasets()`
 - [x] `GET /api/datasets/{namespace}/{repo}` → `getDataset()`
 - [x] `GET /api/datasets-tags-by-type` → `getDatasetTags()`
@@ -696,6 +734,7 @@ do {
 - [x] `GET /datasets/{namespace}/{repo}/user-access-report` → `getDatasetUserAccessReport()`
 
 ### Models
+
 - [x] `GET /api/models` → `listModels()`
 - [x] `GET /api/models/{namespace}/{repo}` → `getModel()`
 - [x] `GET /api/models-tags-by-type` → `getModelTags()`
@@ -728,6 +767,7 @@ do {
 - [x] `GET /{namespace}/{repo}/user-access-report` → `getModelUserAccessReport()`
 
 ### Organizations
+
 - [x] `GET /api/organizations` → `listOrganizations()`
 - [x] `GET /api/organizations/{name}` → `getOrganization()`
 - [x] `GET /api/organizations/{name}/members` → `listOrganizationMembers()`
@@ -743,6 +783,7 @@ do {
 - [ ] `POST /api/organizations/{name}/socials`
 
 ### Papers
+
 - [x] `GET /api/papers` → `listPapers()` (note: API spec shows `/api/papers/search`)
 - [x] `GET /api/papers/{paperId}` → `getPaper()`
 - [x] `GET /api/daily_papers` → `listDailyPapers()`
@@ -750,10 +791,12 @@ do {
 - [ ] `POST /api/papers/{paperId}/comment/{commentId}/reply`
 
 ### Repository Management
+
 - [x] `POST /api/repos/create` → `createRepo()`
 - [x] `POST /api/repos/move` → `moveRepo()`
 
 ### Spaces
+
 - [x] `GET /api/spaces` → `listSpaces()`
 - [x] `GET /api/spaces/{namespace}/{repo}` → `getSpace()`
 - [x] `GET /api/spaces/{namespace}/{repo}/runtime` → `spaceRuntime()`
@@ -789,15 +832,18 @@ do {
 - [ ] `GET /spaces/{namespace}/{repo}/resolve/{rev}/{path}`
 
 ### User
+
 - [x] `GET /api/whoami-v2` → `whoami()`
 - [x] `GET /oauth/userinfo` → `getOAuthUserInfo()`
 - [ ] `GET /api/users/{username}/billing/usage/live`
 - [ ] `POST /api/users/{username}/socials`
 
 ### Repository Settings
+
 - [x] `PUT /api/{repoType}/{namespace}/{repo}/settings` → `updateRepoSettings()`
 
 ### Discussions
+
 - [x] `GET /api/{repoType}/{namespace}/{repo}/discussions` → `listDiscussions()`
 - [x] `GET /api/{repoType}/{namespace}/{repo}/discussions/{num}` → `getDiscussion()`
 - [x] `POST /api/{repoType}/{namespace}/{repo}/discussions/{num}/comment` → `addCommentToDiscussion()`
@@ -808,15 +854,18 @@ do {
 - [x] `POST /api/discussions/mark-as-read` → `markDiscussionsAsRead()`
 
 ##### Blog Comments
+
 - [ ] `POST /api/blog/{namespace}/{slug}/comment`
 - [ ] `POST /api/blog/{namespace}/{slug}/comment/{commentId}/reply`
 - [ ] `POST /api/blog/{slug}/comment`
 - [ ] `POST /api/blog/{slug}/comment/{commentId}/reply`
 
 ##### Documentation
+
 - [ ] `GET /api/docs/search`
 
 ##### Jobs
+
 - [ ] `GET /api/jobs/{namespace}`
 - [ ] `GET /api/jobs/{namespace}/{jobId}`
 - [ ] `POST /api/jobs/{namespace}/{jobId}/cancel`
@@ -825,25 +874,30 @@ do {
 - [ ] `GET /api/jobs/{namespace}/{jobId}/metrics`
 
 ##### Notifications
+
 - [ ] `GET /api/notifications`
 
 ##### Posts
+
 - [ ] `GET /api/posts/{username}/{postSlug}`
 - [ ] `POST /api/posts/{username}/{postSlug}/comment`
 - [ ] `POST /api/posts/{username}/{postSlug}/comment/{commentId}/reply`
 
 ##### Resolve Cache
+
 - [ ] `GET /api/resolve-cache/datasets/{namespace}/{repo}/{rev}/{path}`
 - [ ] `GET /api/resolve-cache/models/{namespace}/{repo}/{rev}/{path}`
 - [ ] `GET /api/resolve-cache/spaces/{namespace}/{repo}/{rev}/{path}`
 
 ##### Scheduled Jobs
+
 - [ ] `GET /api/scheduled-jobs/{namespace}`
 - [ ] `GET /api/scheduled-jobs/{namespace}/{scheduledJobId}`
 - [ ] `POST /api/scheduled-jobs/{namespace}/{scheduledJobId}/resume`
 - [ ] `POST /api/scheduled-jobs/{namespace}/{scheduledJobId}/suspend`
 
 ##### Settings & User Management
+
 - [ ] `GET /api/settings/billing/usage`
 - [ ] `GET /api/settings/billing/usage/jobs`
 - [ ] `GET /api/settings/billing/usage/live`
@@ -858,6 +912,7 @@ do {
 - [ ] `POST /api/settings/webhooks/{webhookId}/{action}`
 
 ##### SQL Console
+
 - [ ] `GET /api/{repoType}/{namespace}/{repo}/sql-console/embed`
 - [ ] `GET /api/{repoType}/{namespace}/{repo}/sql-console/embed/{id}`
 

@@ -33,7 +33,8 @@ import Foundation
 /// checks in the following order:
 /// 1. `HF_HUB_CACHE` environment variable
 /// 2. `HF_HOME` environment variable + `/hub`
-/// 3. `~/.cache/huggingface/hub` (macOS) or `Library/Caches/huggingface/hub` (other platforms)
+/// 3. `~/.cache/huggingface/hub` (non-sandboxed macOS) or
+///    `Library/Caches/huggingface/hub` (sandboxed Apple apps and other platforms)
 ///
 /// ## Usage
 ///
@@ -96,16 +97,7 @@ public struct HubCache: Sendable {
 
     /// The fallback cache directory when resolution fails.
     private static var fallbackDirectory: URL {
-        #if os(macOS)
-            FileManager.default.homeDirectoryForCurrentUser
-                .appendingPathComponent(".cache")
-                .appendingPathComponent("huggingface")
-                .appendingPathComponent("hub")
-        #else
-            URL.cachesDirectory
-                .appendingPathComponent("huggingface")
-                .appendingPathComponent("hub")
-        #endif
+        CacheLocationProvider.defaultCacheDirectory()
     }
 
     // MARK: - Repository Path
@@ -130,6 +122,19 @@ public struct HubCache: Sendable {
         repoDirectory(repo: repo, kind: kind).appendingPathComponent("blobs")
     }
 
+    /// Returns the metadata directory for a repository.
+    ///
+    /// Metadata files are stored outside snapshot directories so snapshots only
+    /// contain repository files.
+    public func metadataDirectory(repo: Repo.ID, kind: Repo.Kind) -> URL {
+        let repoName = repo.description.replacingOccurrences(of: "/", with: "--")
+        let dirName = "\(kind.pluralized)--\(repoName)"
+        return
+            cacheDirectory
+            .appendingPathComponent(".metadata")
+            .appendingPathComponent(dirName)
+    }
+
     /// Returns the refs directory for a repository.
     public func refsDirectory(repo: Repo.ID, kind: Repo.Kind) -> URL {
         repoDirectory(repo: repo, kind: kind).appendingPathComponent("refs")
@@ -138,6 +143,26 @@ public struct HubCache: Sendable {
     /// Returns the snapshots directory for a repository.
     public func snapshotsDirectory(repo: Repo.ID, kind: Repo.Kind) -> URL {
         repoDirectory(repo: repo, kind: kind).appendingPathComponent("snapshots")
+    }
+
+    /// Returns the lock-file base path in the `.locks` hierarchy for a cache path.
+    ///
+    /// For paths within `cacheDirectory`, this mirrors the relative layout under
+    /// `<cacheDirectory>/.locks/...`.
+    /// For paths outside the cache directory, the original path is returned.
+    public func lockPath(for path: URL) -> URL {
+        let cachePath = cacheDirectory.standardizedFileURL.path
+        let targetPath = path.standardizedFileURL.path
+        let cachePrefix = cachePath.hasSuffix("/") ? cachePath : cachePath + "/"
+        guard targetPath.hasPrefix(cachePrefix) else {
+            return path
+        }
+
+        let relativePath = String(targetPath.dropFirst(cachePrefix.count))
+        return
+            cacheDirectory
+            .appendingPathComponent(".locks")
+            .appendingPathComponent(relativePath)
     }
 
     // MARK: - Revision Resolution
@@ -241,6 +266,50 @@ public struct HubCache: Sendable {
         return nil
     }
 
+    /// Returns a validated blob path for an etag.
+    ///
+    /// - Parameters:
+    ///   - repo: The repository identifier.
+    ///   - kind: The kind of repository.
+    ///   - etag: The etag used for content addressing.
+    /// - Returns: The URL to the blob path.
+    /// - Throws: `HubCacheError.invalidPathComponent` when etag is unsafe.
+    public func blobPath(repo: Repo.ID, kind: Repo.Kind, etag: String) throws -> URL {
+        let normalizedEtag = normalizeEtag(etag)
+        try validatePathComponent(normalizedEtag)
+        return blobsDirectory(repo: repo, kind: kind)
+            .appendingPathComponent(normalizedEtag)
+    }
+
+    /// Returns a validated path for an incomplete blob download.
+    ///
+    /// - Parameters:
+    ///   - repo: The repository identifier.
+    ///   - kind: The kind of repository.
+    ///   - etag: The etag used for content addressing.
+    /// - Returns: The URL to the incomplete blob path (`<etag>.incomplete`).
+    /// - Throws: `HubCacheError.invalidPathComponent` when etag is unsafe.
+    public func incompleteBlobPath(repo: Repo.ID, kind: Repo.Kind, etag: String) throws -> URL {
+        let normalizedEtag = normalizeEtag(etag)
+        try validatePathComponent(normalizedEtag)
+        return blobsDirectory(repo: repo, kind: kind)
+            .appendingPathComponent("\(normalizedEtag).incomplete")
+    }
+
+    /// Returns a validated snapshot directory path for a commit hash.
+    ///
+    /// - Parameters:
+    ///   - repo: The repository identifier.
+    ///   - kind: The kind of repository.
+    ///   - commitHash: The commit hash directory name under snapshots.
+    /// - Returns: The URL to the snapshot directory for that commit.
+    /// - Throws: `HubCacheError.invalidPathComponent` when commit hash is unsafe.
+    public func snapshotPath(repo: Repo.ID, kind: Repo.Kind, commitHash: String) throws -> URL {
+        try validatePathComponent(commitHash)
+        return snapshotsDirectory(repo: repo, kind: kind)
+            .appendingPathComponent(commitHash)
+    }
+
     // MARK: - File Storage
 
     /// Stores a file in the cache.
@@ -272,7 +341,7 @@ public struct HubCache: Sendable {
         filename: String,
         etag: String,
         ref: String? = nil
-    ) throws {
+    ) async throws {
         let normalizedEtag = normalizeEtag(etag)
 
         // Validate path components to prevent path traversal attacks
@@ -292,9 +361,9 @@ public struct HubCache: Sendable {
 
         // Store blob (content-addressed) with file locking
         let blobPath = blobsDir.appendingPathComponent(normalizedEtag)
-        let lock = FileLock(path: blobPath)
+        let lock = FileLock(path: lockPath(for: blobPath))
 
-        try lock.withLock {
+        try await lock.withLock {
             if !FileManager.default.fileExists(atPath: blobPath.path) {
                 try FileManager.default.copyItem(at: sourceURL, to: blobPath)
             }
@@ -349,7 +418,7 @@ public struct HubCache: Sendable {
         filename: String,
         etag: String,
         ref: String? = nil
-    ) throws {
+    ) async throws {
         let normalizedEtag = normalizeEtag(etag)
 
         // Validate path components to prevent path traversal attacks
@@ -369,9 +438,9 @@ public struct HubCache: Sendable {
 
         // Store blob with file locking
         let blobPath = blobsDir.appendingPathComponent(normalizedEtag)
-        let lock = FileLock(path: blobPath)
+        let lock = FileLock(path: lockPath(for: blobPath))
 
-        try lock.withLock {
+        try await lock.withLock {
             if !FileManager.default.fileExists(atPath: blobPath.path) {
                 try data.write(to: blobPath, options: .atomic)
             }
@@ -538,12 +607,25 @@ public struct HubCache: Sendable {
 public enum HubCacheError: Error, LocalizedError {
     /// A path component contains unsafe characters that could enable path traversal attacks.
     case invalidPathComponent(String)
+    /// A file destination is invalid for a single-file download operation.
+    case invalidFileDestination(String)
+    /// A file was cached successfully, but its snapshot path could not be resolved.
+    case cachedPathResolutionFailed(String)
+    /// Snapshot download needs either a cache directory or an explicit destination.
+    case snapshotRequiresCacheOrDestination(String)
 
     public var errorDescription: String? {
         switch self {
         case .invalidPathComponent(let component):
             return
                 "Invalid path component '\(component)': contains path traversal characters or is empty"
+        case .invalidFileDestination(let path):
+            return "Invalid file destination '\(path)': expected a file path, not a directory"
+        case .cachedPathResolutionFailed(let path):
+            return "Unable to resolve cached file path for '\(path)'"
+        case .snapshotRequiresCacheOrDestination(let repo):
+            return
+                "Downloading snapshot for '\(repo)' requires either a configured cache or a destination"
         }
     }
 }

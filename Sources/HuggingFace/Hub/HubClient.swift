@@ -38,7 +38,11 @@ import Foundation
 ///
 /// 1. `HF_HUB_CACHE` environment variable
 /// 2. `HF_HOME` environment variable + `/hub`
-/// 3. `~/.cache/huggingface/hub` (standard location)
+/// 3. `~/.cache/huggingface/hub` (non-sandboxed macOS) or
+///    `Library/Caches/huggingface/hub` (sandboxed Apple apps and other platforms)
+///
+/// In sandboxed apps, the default cache is app-scoped. To use a shared
+/// location, set `HF_HUB_CACHE` / `HF_HOME` or pass an explicit `HubCache`.
 ///
 /// To disable caching, pass `cache: nil` when initializing the client.
 ///
@@ -56,7 +60,14 @@ public final class HubClient: Sendable {
     public static let `default` = HubClient()
 
     /// The underlying HTTP client.
-    internal let httpClient: HTTPClient
+    let httpClient: HTTPClient
+
+    /// Session used to fetch file metadata before cross-host redirects.
+    ///
+    /// On Darwin, metadata preflight uses per-task delegates on `session` directly.
+    /// On FoundationNetworking, this dedicated session is configured with
+    /// `SameHostRedirectDelegate` to preserve cross-host redirect blocking.
+    let metadataSession: URLSession
 
     /// The cache for downloaded files, or `nil` if caching is disabled.
     ///
@@ -156,6 +167,15 @@ public final class HubClient: Sendable {
             tokenProvider: tokenProvider,
             session: session
         )
+        #if canImport(FoundationNetworking)
+            self.metadataSession = URLSession(
+                configuration: session.configuration,
+                delegate: SameHostRedirectDelegate.shared,
+                delegateQueue: nil
+            )
+        #else
+            self.metadataSession = session
+        #endif
         self.cache = cache
     }
 
