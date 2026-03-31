@@ -32,8 +32,11 @@ extension HubClient {
     ///   - perPage: Limit the number of models fetched per page.
     ///   - full: Whether to fetch most model data, such as all tags, the files, etc.
     ///   - config: Whether to also fetch the repo config.
+    ///   - library: Filter by library name (e.g., "mlx", "gguf").
     /// - Returns: A lazy sequence of model pages.
     /// - Throws: An error if fetching the first page fails.
+    // Add library parameter for HF ?library= filter
+    // wangqi modified 2026-03-30
     public func listAllModels(
         search: String? = nil,
         author: String? = nil,
@@ -42,7 +45,8 @@ extension HubClient {
         direction: SortDirection? = nil,
         perPage: Int? = nil,
         full: Bool? = nil,
-        config: Bool? = nil
+        config: Bool? = nil,
+        library: String? = nil
     ) async throws -> Pages<Model> {
         let firstPage = try await listModels(
             search: search,
@@ -52,7 +56,8 @@ extension HubClient {
             direction: direction,
             limit: perPage,
             full: full,
-            config: config
+            config: config,
+            library: library
         )
         return Pages(firstPage: firstPage) { [self] page in
             try await nextPage(after: page)

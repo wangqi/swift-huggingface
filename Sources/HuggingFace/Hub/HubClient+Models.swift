@@ -56,6 +56,7 @@ extension HubClient {
     ///   - modelName: Filter by full or partial model name.
     ///   - trainedDataset: Filter by trained dataset tags.
     ///   - pipelineTag: Filter by pipeline tag.
+    ///   - library: Filter by library name (e.g., "mlx", "gguf").
     ///   - sort: Property to use when sorting (e.g., "downloads", "author").
     ///   - direction: Direction in which to sort.
     ///   - limit: Limit the number of models fetched.
@@ -82,6 +83,9 @@ extension HubClient {
         modelName: String? = nil,
         trainedDataset: CommaSeparatedList<String>? = nil,
         pipelineTag: String? = nil,
+        // Add library filter parameter (e.g., "mlx", "gguf") for the HF ?library= query param
+        // wangqi modified 2026-03-30
+        library: String? = nil,
         expand: ExtensibleCommaSeparatedList<ModelExpandField>? = nil,
         cardData: Bool? = nil,
         fetchConfig: Bool? = nil
@@ -98,6 +102,9 @@ extension HubClient {
         if let modelName { params["model_name"] = .string(modelName) }
         if let trainedDataset { params["trained_dataset"] = .string(trainedDataset.rawValue) }
         if let pipelineTag { params["pipeline_tag"] = .string(pipelineTag) }
+        // Pass library filter to HF API as ?library= query param
+        // wangqi modified 2026-03-30
+        if let library { params["library"] = .string(library) }
         if let sort { params["sort"] = .string(sort) }
         if let direction { params["direction"] = .int(direction.rawValue) }
         if let limit { params["limit"] = .int(limit) }
