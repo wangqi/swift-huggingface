@@ -30,6 +30,9 @@ public enum SpeechToText {
 extension InferenceClient {
     /// Transcribes audio to text using the Inference Providers API.
     ///
+    /// Uses provider-specific routing. router.huggingface.co does not expose /v1/audio/transcriptions
+    /// at the top level; each provider has its own route.
+    ///
     /// - Parameters:
     ///   - model: The model to use for transcription.
     ///   - audio: The audio data as a base64-encoded string.
@@ -42,6 +45,7 @@ extension InferenceClient {
     ///   - parameters: Additional parameters for the transcription.
     /// - Returns: A speech-to-text transcription result.
     /// - Throws: An error if the request fails or the response cannot be decoded.
+    // wangqi modified 2026-03-31: use provider-specific routing instead of /v1/audio/transcriptions
     public func speechToText(
         model: String,
         audio: String,
@@ -53,33 +57,46 @@ extension InferenceClient {
         strideLength: Int? = nil,
         parameters: [String: Value]? = nil
     ) async throws -> SpeechToText.Response {
-        var params: [String: Value] = [
-            "model": .string(model),
-            "audio": .string(audio),
-        ]
+        // Resolve effective provider (auto -> hf-inference)
+        let effectiveProvider = ProviderRouting.effectiveProviderString(provider)
 
-        if let provider = provider {
-            params["provider"] = .string(provider.identifier)
-        }
-        if let language = language {
-            params["language"] = .string(language)
-        }
-        if let task = task {
-            params["task"] = .string(task.rawValue)
-        }
-        if let returnTimestamps = returnTimestamps {
-            params["return_timestamps"] = .bool(returnTimestamps)
-        }
-        if let chunkLength = chunkLength {
-            params["chunk_length"] = .int(chunkLength)
-        }
-        if let strideLength = strideLength {
-            params["stride_length"] = .int(strideLength)
-        }
-        if let parameters = parameters {
-            params["parameters"] = .object(parameters)
+        // Build provider-specific URL
+        let url = ProviderRouting.speechToTextURL(
+            host: httpClient.host,
+            provider: effectiveProvider,
+            modelId: model
+        )
+
+        // Build provider-specific body
+        let body = ProviderRouting.speechToTextBody(
+            audio: audio,
+            provider: effectiveProvider,
+            modelId: model,
+            language: language,
+            task: task,
+            returnTimestamps: returnTimestamps,
+            chunkLength: chunkLength,
+            strideLength: strideLength,
+            parameters: parameters
+        )
+
+        // Fetch and decode response
+        let data = try await httpClient.fetchData(.post, url: url, params: body)
+
+        // Parse the response (both hf-inference and OpenAI-compat return JSON with "text" field)
+        let decoder = JSONDecoder()
+        if let response = try? decoder.decode(SpeechToText.Response.self, from: data) {
+            return response
         }
 
-        return try await httpClient.fetch(.post, "/v1/audio/transcriptions", params: params)
+        // Some providers return {"text": "..."} directly
+        struct SimpleTextResponse: Decodable {
+            let text: String
+        }
+        if let simple = try? decoder.decode(SimpleTextResponse.self, from: data) {
+            return SpeechToText.Response(text: simple.text, metadata: nil)
+        }
+
+        throw HTTPClientError.unexpectedError("Unable to parse speech-to-text response from provider")
     }
 }

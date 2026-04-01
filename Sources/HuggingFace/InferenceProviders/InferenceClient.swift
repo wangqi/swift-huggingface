@@ -134,4 +134,70 @@ public final class InferenceClient: Sendable {
         }
         return defaultHost
     }
+
+    // MARK: - Provider model ID resolution
+
+    // Cache to avoid repeated inferenceProviderMapping API calls for the same model+provider pair.
+    // NSCache is thread-safe by design; nonisolated(unsafe) suppresses the Sendable warning.
+    // wangqi modified 2026-03-31
+    nonisolated(unsafe) private static let providerModelIdCache = NSCache<NSString, NSString>()
+
+    /// Resolves the provider-specific model ID from the Hub inferenceProviderMapping.
+    ///
+    /// For example, "black-forest-labs/FLUX.1-schnell" with provider "fal-ai" resolves to
+    /// "fal-ai/flux/schnell". Returns the original model ID on any failure (safe fallback).
+    /// Results are cached to avoid repeated API calls.
+    ///
+    /// - Parameters:
+    ///   - model: The HuggingFace model ID (e.g. "black-forest-labs/FLUX.1-schnell").
+    ///   - provider: The inference provider identifier (e.g. "fal-ai").
+    /// - Returns: The provider-specific model ID, or the original model ID as fallback.
+    // wangqi modified 2026-03-31
+    func resolveProviderModelId(model: String, provider: String) async -> String {
+        let cacheKey = "\(provider)/\(model)" as NSString
+        if let cached = Self.providerModelIdCache.object(forKey: cacheKey) {
+            return cached as String
+        }
+
+        guard let repoId = Repo.ID(rawValue: model) else { return model }
+
+        do {
+            // Build the Hub API URL: GET /api/models/{namespace}/{name}?expand=inferenceProviderMapping
+            var hubURL = URL(string: "https://huggingface.co")!
+                .appending(path: "api")
+                .appending(path: "models")
+                .appending(path: repoId.namespace)
+                .appending(path: repoId.name)
+            var comps = URLComponents(url: hubURL, resolvingAgainstBaseURL: false)!
+            comps.queryItems = [URLQueryItem(name: "expand", value: "inferenceProviderMapping")]
+            hubURL = comps.url!
+
+            var request = URLRequest(url: hubURL)
+            if let token = await bearerToken {
+                request.addValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+            }
+
+            let (data, _) = try await session.data(for: request)
+
+            // Decode only the inferenceProviderMapping field to avoid full Model parsing
+            struct MappingResponse: Decodable {
+                let inferenceProviderMapping: Value?
+            }
+            let decoded = try JSONDecoder().decode(MappingResponse.self, from: data)
+
+            guard let mapping = decoded.inferenceProviderMapping,
+                  case .object(let mappingDict) = mapping,
+                  let providerEntry = mappingDict[provider],
+                  case .object(let providerDict) = providerEntry,
+                  let providerIdValue = providerDict["providerId"],
+                  let providerId = providerIdValue.stringValue else {
+                return model
+            }
+
+            Self.providerModelIdCache.setObject(providerId as NSString, forKey: cacheKey)
+            return providerId
+        } catch {
+            return model
+        }
+    }
 }

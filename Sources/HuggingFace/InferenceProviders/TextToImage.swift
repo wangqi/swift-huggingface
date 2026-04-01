@@ -68,6 +68,11 @@ public enum TextToImage {
 extension InferenceClient {
     /// Generates an image from text using the Inference Providers API.
     ///
+    /// Uses provider-specific routing to reach the correct endpoint. The router at
+    /// router.huggingface.co does not expose /v1/images/generations at the top level;
+    /// each provider has its own route (e.g. hf-inference/models/{model}, fal-ai/{modelId},
+    /// or {provider}/v1/images/generations for OpenAI-compatible providers).
+    ///
     /// - Parameters:
     ///   - model: The model to use for image generation.
     ///   - prompt: The text prompt for image generation.
@@ -79,17 +84,18 @@ extension InferenceClient {
     ///   - guidanceScale: The guidance scale for generation.
     ///   - numInferenceSteps: The number of inference steps.
     ///   - seed: The seed for reproducible generation.
-    ///   - safetyChecker: The safety checker setting.
-    ///   - enhancePrompt: The enhance prompt setting.
-    ///   - multiLingual: The multi-lingual setting.
-    ///   - panorama: The panorama setting.
-    ///   - selfAttention: The self-attention setting.
-    ///   - upscale: The upscale setting.
-    ///   - embeddingsModel: The embeddings model to use.
-    ///   - loras: The loras to apply.
-    ///   - controlnet: The controlnet to use.
+    ///   - safetyChecker: The safety checker setting (passed through for compatible providers).
+    ///   - enhancePrompt: The enhance prompt setting (passed through for compatible providers).
+    ///   - multiLingual: The multi-lingual setting (passed through for compatible providers).
+    ///   - panorama: The panorama setting (passed through for compatible providers).
+    ///   - selfAttention: The self-attention setting (passed through for compatible providers).
+    ///   - upscale: The upscale setting (passed through for compatible providers).
+    ///   - embeddingsModel: The embeddings model to use (passed through for compatible providers).
+    ///   - loras: The loras to apply (passed through for compatible providers).
+    ///   - controlnet: The controlnet to use (passed through for compatible providers).
     /// - Returns: A text-to-image generation result.
     /// - Throws: An error if the request fails or the response cannot be decoded.
+    // wangqi modified 2026-03-31: use provider-specific routing instead of /v1/images/generations
     public func textToImage(
         model: String,
         prompt: String,
@@ -111,64 +117,112 @@ extension InferenceClient {
         loras: [TextToImage.Lora]? = nil,
         controlnet: TextToImage.ControlNet? = nil
     ) async throws -> TextToImage.Response {
-        var params: [String: Value] = [
-            "model": .string(model),
-            "prompt": .string(prompt),
-        ]
+        // Resolve effective provider (auto -> hf-inference)
+        let effectiveProvider = ProviderRouting.effectiveProviderString(provider)
 
-        if let provider = provider {
-            params["provider"] = .string(provider.identifier)
+        // Resolve the provider-specific model ID (e.g. "fal-ai/flux/schnell" for fal-ai)
+        let providerModelId = await resolveProviderModelId(model: model, provider: effectiveProvider)
+
+        // Build the provider-specific URL
+        let url = ProviderRouting.textToImageURL(
+            host: httpClient.host,
+            provider: effectiveProvider,
+            modelId: model,
+            providerModelId: providerModelId
+        )
+
+        // Build the provider-specific request body
+        let body = ProviderRouting.textToImageBody(
+            prompt: prompt,
+            provider: effectiveProvider,
+            modelId: model,
+            width: width,
+            height: height,
+            negativePrompt: negativePrompt,
+            guidanceScale: guidanceScale,
+            numInferenceSteps: numInferenceSteps,
+            seed: seed,
+            numImages: numImages
+        )
+
+        // Fetch raw response bytes
+        let data = try await httpClient.fetchData(.post, url: url, params: body)
+
+        // Parse response based on provider
+        return try await parseTextToImageResponse(data: data, provider: effectiveProvider)
+    }
+
+    /// Parses provider-specific text-to-image response data into a unified Response.
+    // wangqi modified 2026-03-31
+    private func parseTextToImageResponse(data: Data, provider: String) async throws -> TextToImage.Response {
+        let decoder = JSONDecoder()
+
+        switch provider {
+        case "hf-inference":
+            // hf-inference returns raw image bytes (JPEG/PNG binary)
+            let mimeType = data.imageMimeType
+            return TextToImage.Response(image: data, mimeType: mimeType, metadata: nil)
+
+        case "fal-ai":
+            // fal-ai returns: {"images": [{"url": "...", "content_type": "image/jpeg"}], ...}
+            struct FalAIImageResponse: Decodable {
+                struct ImageItem: Decodable {
+                    let url: String?
+                    let contentType: String?
+                    enum CodingKeys: String, CodingKey {
+                        case url
+                        case contentType = "content_type"
+                    }
+                }
+                let images: [ImageItem]?
+            }
+            if let response = try? decoder.decode(FalAIImageResponse.self, from: data),
+               let firstImage = response.images?.first,
+               let urlString = firstImage.url,
+               let imageURL = URL(string: urlString) {
+                // Download the image from the returned URL
+                let (imageData, _) = try await session.data(for: URLRequest(url: imageURL))
+                return TextToImage.Response(image: imageData, mimeType: firstImage.contentType, metadata: nil)
+            }
+            // Fallback: try OpenAI-compatible parsing
+            return try parseOpenAICompatibleImageResponse(data: data, decoder: decoder)
+
+        default:
+            // OpenAI-compatible: {"data": [{"b64_json": "...", "url": "..."}]}
+            return try parseOpenAICompatibleImageResponse(data: data, decoder: decoder)
         }
-        if let negativePrompt = negativePrompt {
-            params["negative_prompt"] = .string(negativePrompt)
-        }
-        if let width = width {
-            params["width"] = .int(width)
-        }
-        if let height = height {
-            params["height"] = .int(height)
-        }
-        if let numImages = numImages {
-            params["num_images"] = .int(numImages)
-        }
-        if let guidanceScale = guidanceScale {
-            params["guidance_scale"] = .double(guidanceScale)
-        }
-        if let numInferenceSteps = numInferenceSteps {
-            params["num_inference_steps"] = .int(numInferenceSteps)
-        }
-        if let seed = seed {
-            params["seed"] = .int(seed)
-        }
-        if let safetyChecker = safetyChecker {
-            params["safety_checker"] = .bool(safetyChecker)
-        }
-        if let enhancePrompt = enhancePrompt {
-            params["enhance_prompt"] = .bool(enhancePrompt)
-        }
-        if let multiLingual = multiLingual {
-            params["multi_lingual"] = .bool(multiLingual)
-        }
-        if let panorama = panorama {
-            params["panorama"] = .bool(panorama)
-        }
-        if let selfAttention = selfAttention {
-            params["self_attention"] = .bool(selfAttention)
-        }
-        if let upscale = upscale {
-            params["upscale"] = .bool(upscale)
-        }
-        if let embeddingsModel = embeddingsModel {
-            params["embeddings_model"] = .string(embeddingsModel)
-        }
-        if let loras = loras {
-            params["loras"] = try .init(loras)
-        }
-        if let controlnet = controlnet {
-            params["controlnet"] = try .init(controlnet)
+    }
+
+    private func parseOpenAICompatibleImageResponse(data: Data, decoder: JSONDecoder) throws -> TextToImage.Response {
+        struct OpenAIImageResponse: Decodable {
+            struct ImageItem: Decodable {
+                let b64Json: String?
+                let url: String?
+                enum CodingKeys: String, CodingKey {
+                    case b64Json = "b64_json"
+                    case url
+                }
+            }
+            let data: [ImageItem]?
         }
 
-        return try await httpClient.fetch(.post, "/v1/images/generations", params: params)
+        if let response = try? decoder.decode(OpenAIImageResponse.self, from: data),
+           let firstItem = response.data?.first {
+            if let b64 = firstItem.b64Json, let imageData = Data(base64Encoded: b64) {
+                return TextToImage.Response(image: imageData, mimeType: "image/png", metadata: nil)
+            }
+            if let urlString = firstItem.url {
+                // Return URL in metadata so the caller can download it
+                let urlData = urlString.data(using: .utf8) ?? Data()
+                return TextToImage.Response(
+                    image: urlData,
+                    mimeType: nil,
+                    metadata: ["download_url": .string(urlString)]
+                )
+            }
+        }
+
+        throw HTTPClientError.unexpectedError("Unable to parse text-to-image response from provider")
     }
 }
 

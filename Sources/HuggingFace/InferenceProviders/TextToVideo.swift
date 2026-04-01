@@ -24,6 +24,9 @@ public enum TextToVideo {
 extension InferenceClient {
     /// Generates a video from text using the Inference Providers API.
     ///
+    /// Uses provider-specific routing. router.huggingface.co does not expose /v1/videos/generations
+    /// at the top level; each provider has its own route.
+    ///
     /// - Parameters:
     ///   - model: The model to use for video generation.
     ///   - prompt: The text prompt for video generation.
@@ -43,6 +46,7 @@ extension InferenceClient {
     ///   - motionStrength: The motion strength for video generation.
     /// - Returns: A text-to-video generation result.
     /// - Throws: An error if the request fails or the response cannot be decoded.
+    // wangqi modified 2026-03-31: use provider-specific routing instead of /v1/videos/generations
     public func textToVideo(
         model: String,
         prompt: String,
@@ -61,55 +65,99 @@ extension InferenceClient {
         duration: Double? = nil,
         motionStrength: Double? = nil
     ) async throws -> TextToVideo.Response {
-        var params: [String: Value] = [
-            "model": .string(model),
-            "prompt": .string(prompt),
-        ]
+        // Resolve effective provider (auto -> hf-inference)
+        let effectiveProvider = ProviderRouting.effectiveProviderString(provider)
 
-        if let provider = provider {
-            params["provider"] = .string(provider.identifier)
-        }
-        if let negativePrompt = negativePrompt {
-            params["negative_prompt"] = .string(negativePrompt)
-        }
-        if let width = width {
-            params["width"] = .int(width)
-        }
-        if let height = height {
-            params["height"] = .int(height)
-        }
-        if let numFrames = numFrames {
-            params["num_frames"] = .int(numFrames)
-        }
-        if let frameRate = frameRate {
-            params["frame_rate"] = .int(frameRate)
-        }
-        if let numVideos = numVideos {
-            params["num_videos"] = .int(numVideos)
-        }
-        if let guidanceScale = guidanceScale {
-            params["guidance_scale"] = .double(guidanceScale)
-        }
-        if let numInferenceSteps = numInferenceSteps {
-            params["num_inference_steps"] = .int(numInferenceSteps)
-        }
-        if let seed = seed {
-            params["seed"] = .int(seed)
-        }
-        if let safetyChecker = safetyChecker {
-            params["safety_checker"] = .bool(safetyChecker)
-        }
-        if let enhancePrompt = enhancePrompt {
-            params["enhance_prompt"] = .bool(enhancePrompt)
-        }
-        if let duration = duration {
-            params["duration"] = .double(duration)
-        }
-        if let motionStrength = motionStrength {
-            params["motion_strength"] = .double(motionStrength)
-        }
+        // Resolve the provider-specific model ID
+        let providerModelId = await resolveProviderModelId(model: model, provider: effectiveProvider)
 
-        return try await httpClient.fetch(.post, "/v1/videos/generations", params: params)
+        // Build the provider-specific URL
+        let url = ProviderRouting.textToVideoURL(
+            host: httpClient.host,
+            provider: effectiveProvider,
+            modelId: model,
+            providerModelId: providerModelId
+        )
+
+        // Build the provider-specific request body
+        let body = ProviderRouting.textToVideoBody(
+            prompt: prompt,
+            provider: effectiveProvider,
+            modelId: model,
+            width: width,
+            height: height,
+            negativePrompt: negativePrompt,
+            numFrames: numFrames,
+            frameRate: frameRate,
+            guidanceScale: guidanceScale,
+            numInferenceSteps: numInferenceSteps,
+            seed: seed,
+            numVideos: numVideos,
+            duration: duration,
+            motionStrength: motionStrength
+        )
+
+        // Fetch raw response bytes
+        let data = try await httpClient.fetchData(.post, url: url, params: body)
+
+        // Parse response based on provider
+        return try await parseTextToVideoResponse(data: data, provider: effectiveProvider)
+    }
+
+    /// Parses provider-specific text-to-video response data into a unified Response.
+    // wangqi modified 2026-03-31
+    private func parseTextToVideoResponse(data: Data, provider: String) async throws -> TextToVideo.Response {
+        let decoder = JSONDecoder()
+
+        switch provider {
+        case "hf-inference":
+            // hf-inference returns raw video bytes
+            return TextToVideo.Response(video: data, mimeType: "video/mp4", metadata: nil)
+
+        case "fal-ai":
+            // fal-ai returns: {"video": {"url": "...", "content_type": "video/mp4"}, ...}
+            struct FalAIVideoResponse: Decodable {
+                struct VideoItem: Decodable {
+                    let url: String?
+                    let contentType: String?
+                    enum CodingKeys: String, CodingKey {
+                        case url
+                        case contentType = "content_type"
+                    }
+                }
+                let video: VideoItem?
+            }
+            if let response = try? decoder.decode(FalAIVideoResponse.self, from: data),
+               let urlString = response.video?.url,
+               let videoURL = URL(string: urlString) {
+                let (videoData, _) = try await session.data(for: URLRequest(url: videoURL))
+                return TextToVideo.Response(video: videoData, mimeType: response.video?.contentType, metadata: nil)
+            }
+            // Fallback: return raw bytes
+            return TextToVideo.Response(video: data, mimeType: "video/mp4", metadata: nil)
+
+        default:
+            // OpenAI-compatible: try JSON with base64, otherwise treat as raw bytes
+            struct OpenAIVideoResponse: Decodable {
+                struct VideoItem: Decodable {
+                    let b64Json: String?
+                    let url: String?
+                    enum CodingKeys: String, CodingKey {
+                        case b64Json = "b64_json"
+                        case url
+                    }
+                }
+                let data: [VideoItem]?
+            }
+            if let response = try? decoder.decode(OpenAIVideoResponse.self, from: data),
+               let firstItem = response.data?.first {
+                if let b64 = firstItem.b64Json, let videoData = Data(base64Encoded: b64) {
+                    return TextToVideo.Response(video: videoData, mimeType: "video/mp4", metadata: nil)
+                }
+            }
+            // Fallback: raw bytes
+            return TextToVideo.Response(video: data, mimeType: "video/mp4", metadata: nil)
+        }
     }
 }
 

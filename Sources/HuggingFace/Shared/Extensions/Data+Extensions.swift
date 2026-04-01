@@ -81,4 +81,21 @@ extension Data {
         let base64Data = self.base64EncodedString()
         return "data:\(mimeType ?? "text/plain");base64,\(base64Data)"
     }
+
+    /// Infers the image MIME type from binary magic bytes.
+    /// Returns "image/jpeg", "image/png", "image/gif", or "image/webp" based on the header bytes.
+    /// Falls back to nil if the format cannot be determined.
+    // wangqi modified 2026-03-31
+    var imageMimeType: String? {
+        guard count >= 4 else { return nil }
+        let bytes = [UInt8](prefix(12))
+        if bytes.starts(with: [0xFF, 0xD8, 0xFF]) { return "image/jpeg" }
+        if bytes.starts(with: [0x89, 0x50, 0x4E, 0x47]) { return "image/png" }
+        if bytes.starts(with: [0x47, 0x49, 0x46]) { return "image/gif" }
+        if bytes.count >= 12,
+           bytes[8] == 0x57, bytes[9] == 0x45, bytes[10] == 0x42, bytes[11] == 0x50 {
+            return "image/webp"
+        }
+        return nil
+    }
 }
