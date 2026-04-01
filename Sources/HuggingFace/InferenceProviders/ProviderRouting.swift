@@ -25,6 +25,20 @@ enum ProviderRouting {
 
     // MARK: - URL helpers
 
+    /// Returns the router base URL, stripping a trailing "/v1" if present.
+    /// The stored model_url may be the OpenAI-compat base (e.g. "https://router.huggingface.co/v1"),
+    /// but provider routing requires the bare host ("https://router.huggingface.co").
+    // wangqi modified 2026-03-31
+    static func routerBase(from host: URL) -> URL {
+        var str = host.absoluteString
+        if str.hasSuffix("/v1") {
+            str = String(str.dropLast(3))
+        } else if str.hasSuffix("/v1/") {
+            str = String(str.dropLast(4))
+        }
+        return URL(string: str) ?? host
+    }
+
     /// Appends multiple path components to a URL.
     private static func append(to url: URL, path: String) -> URL {
         // appending(path:) treats "/" as path separator and does not percent-encode them.
@@ -35,20 +49,21 @@ enum ProviderRouting {
 
     /// Builds the provider-specific URL for a text-to-image request.
     static func textToImageURL(host: URL, provider: String, modelId: String, providerModelId: String) -> URL {
+        let base = routerBase(from: host)
         switch provider {
         case "fal-ai":
             // providerModelId is like "fal-ai/flux/schnell" – strip the "fal-ai/" prefix for the route.
             let modelPath = providerModelId.hasPrefix("fal-ai/")
                 ? String(providerModelId.dropFirst("fal-ai/".count))
                 : providerModelId
-            return append(to: host, path: "fal-ai/\(modelPath)")
+            return append(to: base, path: "fal-ai/\(modelPath)")
 
         case "hf-inference":
-            return append(to: host, path: "hf-inference/models/\(modelId)")
+            return append(to: base, path: "hf-inference/models/\(modelId)")
 
         default:
             // OpenAI-compatible providers: {host}/{provider}/v1/images/generations
-            return append(to: host, path: "\(provider)/v1/images/generations")
+            return append(to: base, path: "\(provider)/v1/images/generations")
         }
     }
 
@@ -115,18 +130,19 @@ enum ProviderRouting {
     // MARK: - Text-to-Video routing
 
     static func textToVideoURL(host: URL, provider: String, modelId: String, providerModelId: String) -> URL {
+        let base = routerBase(from: host)
         switch provider {
         case "fal-ai":
             let modelPath = providerModelId.hasPrefix("fal-ai/")
                 ? String(providerModelId.dropFirst("fal-ai/".count))
                 : providerModelId
-            return append(to: host, path: "fal-ai/\(modelPath)")
+            return append(to: base, path: "fal-ai/\(modelPath)")
 
         case "hf-inference":
-            return append(to: host, path: "hf-inference/models/\(modelId)")
+            return append(to: base, path: "hf-inference/models/\(modelId)")
 
         default:
-            return append(to: host, path: "\(provider)/v1/videos/generations")
+            return append(to: base, path: "\(provider)/v1/videos/generations")
         }
     }
 
@@ -194,11 +210,12 @@ enum ProviderRouting {
     // MARK: - Speech-to-Text routing
 
     static func speechToTextURL(host: URL, provider: String, modelId: String) -> URL {
+        let base = routerBase(from: host)
         switch provider {
         case "hf-inference":
-            return append(to: host, path: "hf-inference/models/\(modelId)")
+            return append(to: base, path: "hf-inference/models/\(modelId)")
         default:
-            return append(to: host, path: "\(provider)/v1/audio/transcriptions")
+            return append(to: base, path: "\(provider)/v1/audio/transcriptions")
         }
     }
 
