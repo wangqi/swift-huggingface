@@ -1,4 +1,4 @@
-// swift-tools-version: 6.1
+// swift-tools-version: 6.0
 // The swift-tools-version declares the minimum version of Swift required to build this package.
 
 import PackageDescription
@@ -6,23 +6,17 @@ import PackageDescription
 let package = Package(
     name: "swift-huggingface",
     platforms: [
-        .macOS(.v14),
-        .macCatalyst(.v17),
-        .iOS(.v17),
-        .watchOS(.v10),
-        .tvOS(.v17),
+        .macOS(.v13),
+        .macCatalyst(.v16),
+        .iOS(.v16),
+        .watchOS(.v9),
+        .tvOS(.v16),
         .visionOS(.v1),
     ],
     products: [
         .library(
             name: "HuggingFace",
             targets: ["HuggingFace"]
-        )
-    ],
-    traits: [
-        .trait(
-            name: "Xet",
-            description: "Enable Xet transport support.",
         )
     ],
     dependencies: [
@@ -36,25 +30,25 @@ let package = Package(
             dependencies: [
                 .product(name: "EventSource", package: "EventSource"),
                 .product(name: "Crypto", package: "swift-crypto"),
-                .product(name: "Xet", package: "swift-xet", condition: .when(traits: ["Xet"])),
+                .product(name: "Xet", package: "swift-xet"),
             ],
             path: "Sources/HuggingFace",
             swiftSettings: [
-                .define("HUGGINGFACE_ENABLE_XET", .when(traits: ["Xet"]))
+                .define("HUGGINGFACE_ENABLE_XET")
             ]
         ),
         .testTarget(
             name: "HuggingFaceTests",
             dependencies: ["HuggingFace"],
             swiftSettings: [
-                .define("HUGGINGFACE_ENABLE_XET", .when(traits: ["Xet"]))
+                .define("HUGGINGFACE_ENABLE_XET")
             ]
         ),
         .testTarget(
             name: "HubBenchmarks",
             dependencies: ["HuggingFace"],
             swiftSettings: [
-                .define("HUGGINGFACE_ENABLE_XET", .when(traits: ["Xet"]))
+                .define("HUGGINGFACE_ENABLE_XET")
             ]
         ),
     ]

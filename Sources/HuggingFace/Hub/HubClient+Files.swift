@@ -9,7 +9,9 @@ import Foundation
     import FoundationNetworking
 #endif
 
-import Xet
+#if HUGGINGFACE_ENABLE_XET
+    import Xet
+#endif
 
 private let xetMinimumFileSizeBytes = 16 * 1024 * 1024  // 16MiB
 private let snapshotUnknownFileWeight: Int64 = 1
@@ -345,23 +347,33 @@ public extension HubClient {
             return try Data(contentsOf: cachedPath)
         }
 
-        if endpoint == .resolve, transport.shouldAttemptXet {
-            do {
-                if let data = try await downloadDataWithXet(
-                    repoPath: repoPath,
-                    repo: repo,
-                    kind: kind,
-                    revision: revision,
-                    transport: transport
-                ) {
-                    return data
-                }
-            } catch {
-                if transport == .xet {
-                    throw error
+        #if !HUGGINGFACE_ENABLE_XET
+            if transport == .xet {
+                throw HTTPClientError.requestError(
+                    "Xet transport requires enabling the Xet package trait"
+                )
+            }
+        #endif
+
+        #if HUGGINGFACE_ENABLE_XET
+            if endpoint == .resolve, transport.shouldAttemptXet {
+                do {
+                    if let data = try await downloadDataWithXet(
+                        repoPath: repoPath,
+                        repo: repo,
+                        kind: kind,
+                        revision: revision,
+                        transport: transport
+                    ) {
+                        return data
+                    }
+                } catch {
+                    if transport == .xet {
+                        throw error
+                    }
                 }
             }
-        }
+        #endif
 
         // Fallback to existing LFS download method
         let url = httpClient.host
@@ -451,26 +463,36 @@ public extension HubClient {
             throw HubCacheError.cachedPathResolutionFailed(repoPath)
         }
 
+        #if !HUGGINGFACE_ENABLE_XET
+            if transport == .xet {
+                throw HTTPClientError.requestError(
+                    "Xet transport requires enabling the Xet package trait"
+                )
+            }
+        #endif
+
         // Try Xet transport first when requested and destination is explicit
-        if endpoint == .resolve, transport.shouldAttemptXet, let xetDestination = destination {
-            do {
-                if let downloaded = try await downloadFileWithXet(
-                    repoPath: repoPath,
-                    repo: repo,
-                    kind: kind,
-                    revision: revision,
-                    destination: xetDestination,
-                    progress: progress,
-                    transport: transport
-                ) {
-                    return downloaded
-                }
-            } catch {
-                if transport == .xet {
-                    throw error
+        #if HUGGINGFACE_ENABLE_XET
+            if endpoint == .resolve, transport.shouldAttemptXet, let xetDestination = destination {
+                do {
+                    if let downloaded = try await downloadFileWithXet(
+                        repoPath: repoPath,
+                        repo: repo,
+                        kind: kind,
+                        revision: revision,
+                        destination: xetDestination,
+                        progress: progress,
+                        transport: transport
+                    ) {
+                        return downloaded
+                    }
+                } catch {
+                    if transport == .xet {
+                        throw error
+                    }
                 }
             }
-        }
+        #endif
 
         // Build URL and gather optional preflight metadata for cache-aware flows
         let url = httpClient.host
@@ -1419,11 +1441,15 @@ private extension HubClient {
     }
 
     func snapshotTransport(for entry: Git.TreeEntry) -> FileDownloadTransport {
+        #if HUGGINGFACE_ENABLE_XET
         let useXet = FileDownloadTransport.automatic.shouldUseXet(
             fileSizeBytes: entry.size,
             minimumFileSizeBytes: xetMinimumFileSizeBytes
         )
         return useXet ? .automatic : .lfs
+        #else
+        return .lfs
+        #endif
     }
 
     func makeSnapshotProgressSamplingTask(
@@ -1760,23 +1786,28 @@ private extension HubClient {
         revision: String,
         transport: FileDownloadTransport
     ) async throws -> Data? {
-        guard
-            let fileID = try await fetchXetFileID(
-                repoPath: repoPath,
-                repo: repo,
-                revision: revision,
-                transport: transport
-            )
-        else {
-            return nil
-        }
+        #if HUGGINGFACE_ENABLE_XET
+            guard
+                let fileID = try await fetchXetFileID(
+                    repoPath: repoPath,
+                    repo: repo,
+                    revision: revision,
+                    transport: transport
+                )
+            else {
+                return nil
+            }
 
-        return try await Xet.withDownloader(
-            refreshURL: xetRefreshURL(for: repo, kind: kind, revision: revision),
-            hubToken: try? await httpClient.tokenProvider.getToken()
-        ) { downloader in
-            try await downloader.data(for: fileID)
-        }
+            return try await Xet.withDownloader(
+                refreshURL: xetRefreshURL(for: repo, kind: kind, revision: revision),
+                hubToken: try? await httpClient.tokenProvider.getToken()
+            ) { downloader in
+                try await downloader.data(for: fileID)
+            }
+        #else
+            _ = transport
+            return nil
+        #endif
     }
 
     /// Downloads a file using Xet's content-addressable storage system.
@@ -1790,28 +1821,33 @@ private extension HubClient {
         progress: Progress?,
         transport: FileDownloadTransport
     ) async throws -> URL? {
-        guard
-            let fileID = try await fetchXetFileID(
-                repoPath: repoPath,
-                repo: repo,
-                revision: revision,
-                transport: transport
-            )
-        else {
+        #if HUGGINGFACE_ENABLE_XET
+            guard
+                let fileID = try await fetchXetFileID(
+                    repoPath: repoPath,
+                    repo: repo,
+                    revision: revision,
+                    transport: transport
+                )
+            else {
+                return nil
+            }
+
+            _ = try await Xet.withDownloader(
+                refreshURL: xetRefreshURL(for: repo, kind: kind, revision: revision),
+                hubToken: try? await httpClient.tokenProvider.getToken()
+            ) { downloader in
+                try await downloader.download(fileID, to: destination)
+            }
+
+            progress?.totalUnitCount = 100
+            progress?.completedUnitCount = 100
+
+            return destination
+        #else
+            _ = transport
             return nil
-        }
-
-        _ = try await Xet.withDownloader(
-            refreshURL: xetRefreshURL(for: repo, kind: kind, revision: revision),
-            hubToken: try? await httpClient.tokenProvider.getToken()
-        ) { downloader in
-            try await downloader.download(fileID, to: destination)
-        }
-
-        progress?.totalUnitCount = 100
-        progress?.completedUnitCount = 100
-
-        return destination
+        #endif
     }
 
     /// Fetch the Xet file ID for a given repository, path, and revision.
