@@ -1,196 +1,138 @@
-# swift-huggingface: What's New from 0.7.0 to 0.8.1
+# swift-huggingface: What's New from 0.8.1 to tag-20260412
 
-Generated: 2026-03-15
-Source: `git log tag-0.7.0..tag-0.8.1`
+Generated: 2026-04-12
+Source: `git log tag-0.8.1..tag-20260412`
 
 ---
 
 ## Summary
 
-19 commits between tag-0.7.0 and tag-0.8.1, covering one critical iOS/macOS sandbox fix, three major download subsystem rewrites, one API expansion, two bugfixes, and several infrastructure improvements.
+8 commits between tag-0.8.1 and tag-20260412, covering one major build system change (Xet trait gating), one Mac Catalyst build fix, two inference endpoint bug fixes, one model search enhancement, and a gitignore update. Version bumped to 0.9.0.
 
 ---
 
 ## New Features and Changes
 
-### 1. iOS and Sandboxed App Cache Path Fix (CRITICAL for iOS) [#40]
+### 1. Xet Transport Gated Behind Optional Package Trait (#46)
 
-**Commit:** `9b2f377` — *Resolve HubCache paths for iOS and sandboxed apps*
+**Commit:** `169d588` — *Conditionalize `swift-xet` dependency behind `"Xet"` trait*
+**Author:** Mattt (upstream)
 
-Previously, `CacheLocationProvider` used a compile-time `#if os(macOS)` branch: macOS always resolved to `~/.cache/huggingface/hub` and iOS always resolved to `URL.cachesDirectory/huggingface/hub`. This was incorrect for sandboxed macOS apps (Mac Catalyst, App Sandbox), which cannot write to the user home `.cache` directory.
+The `swift-xet` dependency — which enables the high-throughput Xet protocol for downloading large model files — is now optional, controlled by a `"Xet"` package trait. Previously it was an unconditional dependency.
 
-**New behavior:**
-- Non-sandboxed macOS: `~/.cache/huggingface/hub` (unchanged)
-- Sandboxed macOS / Mac Catalyst / iOS: `Library/Caches/huggingface/hub` (app container)
-- Detection uses `APP_SANDBOX_CONTAINER_ID` environment variable, consistent with the Python `huggingface_hub` library.
+**What changed:**
+- `Package.swift` bumped to `swift-tools-version: 6.1` (required for package traits).
+- A `Package@swift-6.0.swift` fallback manifest was added for Swift 6.0 consumers without trait support; in that manifest Xet is disabled by default.
+- `HUGGINGFACE_ENABLE_XET` compiler flag is defined only when the `Xet` trait is active.
+- All Xet code paths in `HubClient+Files.swift` are now wrapped in `#if HUGGINGFACE_ENABLE_XET` guards. If the trait is disabled and `.xet` transport is explicitly requested, an informative error is thrown instead of crashing.
+- LFS fallback is preserved when Xet is disabled.
 
-**Impact on this project:** Direct fix for iOS and Mac Catalyst app container writes. Without this, HubCache would attempt to write outside the app sandbox and silently fail or crash.
+**Impact on this project (iOS):**
 
----
-
-### 2. Parallel LFS Snapshot Downloads with Weighted Progress [#35]
-
-**Commit:** `95fb37a` — *Parallelize LFS snapshot downloads and weight progress by file size*
-
-Download of snapshot files is now fully parallelized (previously sequential). Progress reporting is now weighted by file size rather than file count, so large-model downloads show accurate progress bars.
-
-**Impact:** Significantly faster model downloads, especially for multi-file models (GGUF shards, MLX weights). No API change at the call site.
-
----
-
-### 3. Cache-First Snapshot Download with Resume and Local-Only Fallback [#34]
-
-**Commit:** `cc6ea51` — *Add cache-first snapshot download paths with resume and local-only fallback*
-
-Rewrites the `downloadSnapshot` family to:
-- Return cached paths immediately if the snapshot is already complete (no network call)
-- Support resumable downloads via HTTP Range requests for partial blobs
-- Support `localFilesOnly: true` to resolve from local cache only, throwing `HubCacheError.cachedPathResolutionFailed` if missing (offline mode)
-
-New overloads are additive; existing call sites continue to work unchanged.
+| Risk | Detail |
+|------|--------|
+| **Build system** | Requires Xcode with Swift 6.1 toolchain. Projects using Swift 6.0 must use `Package@swift-6.0.swift`, where Xet is off by default. Verify Xcode version in CI. |
+| **Functionality** | No behavior change for normal LFS downloads. The Xet fast-path only activates when the trait is enabled AND the Hub resolves the model to a Xet-backed endpoint. |
+| **App binary size** | If the `Xet` trait is active (default), `swift-xet` is still linked. Disable the trait if binary size is a concern and Xet speed is not needed. |
 
 ---
 
-### 4. Commit-Hash Metadata Fast Path [#33]
+### 2. Mac Catalyst Build Fix: Duplicate Symbol for HuggingFaceAuthenticationPresentationContextProvider (#45)
 
-**Commit:** `7edf91e` — *Return cache-backed snapshot paths and add commit-hash metadata fast path*
+**Commit:** `f2b0353` — *Fix Mac Catalyst build: resolve duplicate HuggingFaceAuthenticationPresentationContextProvider*
+**Author:** 1R053 (upstream)
 
-When a complete cached snapshot is found, `downloadSnapshot` now skips the commit-hash API call and returns the cached path directly. This eliminates unnecessary network round-trips for already-downloaded models.
+On Mac Catalyst, both `canImport(AppKit)` and `canImport(UIKit)` evaluate to `true`, causing two definitions of `HuggingFaceAuthenticationPresentationContextProvider` to compile simultaneously. This triggered:
 
----
+- `'HuggingFaceAuthenticationPresentationContextProvider' is ambiguous for type lookup`
+- `Invalid redeclaration of 'HuggingFaceAuthenticationPresentationContextProvider'`
+- `Cannot convert return expression of type 'NSObject?' to return type 'ASPresentationAnchor'`
 
-### 5. API Expansion: Harmonize with Python `huggingface_hub` [#28]
+**Fix:** Added `!targetEnvironment(macCatalyst)` to the AppKit guard so only the UIKit branch compiles under Mac Catalyst.
 
-**Commit:** `928f33d` — *Harmonize with huggingface_hub library*
-
-Adds new types and query parameters aligned with the Python `huggingface_hub` library:
-
-- `CommaSeparatedList<Value>` — generic type for Hub API expand and filter parameters
-- `ModelExpandField` — expandable model response fields: `author`, `cardData`, `config`, `downloads`, `gguf`, `inference`, `inferenceProviderMapping`, `safetensors`, `siblings`, and more
-- `ModelInference` — inference availability filter (`.warm`)
-- `SiblingInfo` — now includes a `size` property for per-file size metadata
-- `HubClient+Models`, `HubClient+Datasets`, `HubClient+Repos`, `HubClient+Spaces` — all updated with `expand:` and filter parameters
-
-All changes are additive; no existing call sites break.
+**Impact on this project:** Direct fix for Mac (Mac Catalyst) builds that use HuggingFace OAuth. Previously the Mac Catalyst target would not compile at all if the OAuth module was in scope. No behavior change on iOS.
 
 ---
 
-### 6. File Locking: Reentrant Locks and Improved Error Handling [#29]
+### 3. Provider-Specific Routing for Non-Chat Inference Endpoints
 
-**Commit:** `38299d3` — *Update file locking implementation to support reentrancy and improved error handling*
+**Commit:** `88809fd` — *Fix non-chat inference endpoints by adding provider-specific routing for textToImage, textToVideo, and speechToText*
+**Author:** wangqi (local)
 
-Rewrites `FileLock` to support:
-- Reentrant locking (a task can re-acquire a lock it already holds)
-- Explicit error throwing instead of silent failure
-- Lock held correctly across `await` suspension points for structured concurrency
+A new `ProviderRouting.swift` file was added to the `InferenceProviders` module. Before this fix, `textToImage`, `textToVideo`, and `speechToText` calls all fell through to broken `/v1/*` top-level paths that returned 404s from providers such as fal-ai and hf-inference.
 
-Concurrent downloads introduced in #35 depend on correct file locking. This is a correctness prerequisite for the parallel download feature.
+**New routing table:**
 
----
+| Provider | textToImage URL | textToVideo URL |
+|----------|----------------|----------------|
+| `fal-ai` | `{host}/fal-ai/{modelPath}` | `{host}/fal-ai/{modelPath}` |
+| `hf-inference` | `{host}/hf-inference/models/{modelId}` | `{host}/hf-inference/models/{modelId}` |
+| OpenAI-compat | `{host}/{provider}/v1/images/generations` | `{host}/{provider}/v1/videos/generations` |
 
-### 7. Lock Hierarchy Aligned with Python Library [#36]
+Provider-specific request body formatting is also handled per provider (fal-ai uses `image_size` object; hf-inference uses `inputs` + `parameters`; others use OpenAI-compatible JSON).
 
-**Commit:** `11ae702` — *Route cache blob locks through the .locks hierarchy*
-
-Lock files are now stored under `{cacheRoot}/.locks/` instead of alongside blob files, matching the Python `huggingface_hub` directory layout. No functional change for the app.
-
----
-
-### 8. Bugfix: Files Sharing the Same Blob Copied Incorrectly [#42]
-
-**Commit:** `de01c0a` — *Fix different files referring to the same blob being copied incorrectly in a snapshot download*
-
-In LFS snapshots, multiple filenames can point to the same blob (same content hash). Previously, when copying from cache to the snapshot directory, only the last copy survived. Each pointer file now gets its own copy.
-
-**Impact:** Affects repos where multiple files share identical content — for example, tokenizer configs bundled alongside multiple model variants.
+**Impact on this project:** Required for image generation and video generation features that call HuggingFace Inference. Previously those calls always returned 404 regardless of model. No breaking API changes; call sites are unchanged.
 
 ---
 
-### 9. Bugfix: Download Destinations Treated as File Paths Consistently [#43]
+### 4. Strip Trailing `/v1` from Host Before Provider-Routed URLs
 
-**Commit:** `9ca2e54` — *Treat HubClient download destinations as file paths consistently*
+**Commit:** `12e1868` — *Strip trailing /v1 from host before building provider-routed URLs to fix 404*
+**Author:** wangqi (local)
 
-Fixes an edge case where the download destination URL was treated as a directory in some code paths and a file path in others. Affected behavior when specifying a custom download destination.
+`model_url` in the app config stores the OpenAI-compatible base URL which typically ends in `/v1` (e.g. `https://router.huggingface.co/v1`). When `ProviderRouting` appends its own path segments, the resulting URL becomes double-rooted (e.g. `.../v1/fal-ai/...`), causing 404s.
 
----
+**Fix:** A `routerBase(from:)` helper strips a trailing `/v1` or `/v1/` before any path is appended, used by all three routing functions (`textToImageURL`, `textToVideoURL`, `speechToTextURL`).
 
-### 10. Dataset API: URL-Only Parquet Responses [#39]
-
-**Commit:** `7b09cef` — *Handle URL-only dataset parquet responses in Hub API*
-
-The Hub API can return parquet file entries as bare URLs. `Dataset.swift` now handles this case; previously it failed to decode such responses.
+**Impact on this project:** Companion fix to item 3 above. Both fixes together are required for image/video/speech inference to work correctly when `model_url` is stored as the OpenAI-compat base.
 
 ---
 
-### 11. Dependency: swift-xet Moved to huggingface Org [#44]
+### 5. MLX and GGUF Library Filtering for Model Search
 
-**Commit:** `f724f92` — *Update location of swift-xet dependency*
+**Commits:** `d62169c` — *Improve: make it support mlx and gguf filtering*
+**Author:** wangqi (local)
 
-`swift-xet` moved from `github.com/mattt/swift-xet` to `github.com/huggingface/swift-xet`. Same version (`from: "0.2.0"`), only the URL changed. `Package.resolved` will update automatically on next resolve.
+A `library` parameter was added to both `HubClient.listModels()` and `HubClient.listAllModels()`, mapping to the HuggingFace API `?library=` query parameter.
+
+**Usage:**
+```swift
+// Search for MLX models only
+let models = try await hub.listModels(library: "mlx")
+
+// Paginate over GGUF models
+let pages = try await hub.listAllModels(library: "gguf")
+```
+
+**Impact on this project:** Directly enables filtering the model discovery browser by inference type without post-processing the full result set. This is a non-breaking additive change; the parameter is optional and defaults to `nil` (no filter).
 
 ---
 
-### 12. Xet CDN: Capture Metadata Before CDN Redirect [#31]
+### 6. Version Bump to 0.9.0
 
-**Commit:** `b0f2286` — *Capture Xet metadata before potential cross-host CDN redirect*
+**Commit:** `b721959`
+**Author:** Mattt (upstream)
 
-Xet metadata headers must be read before the HTTP client follows a cross-host CDN redirect, which strips headers. Previously, redirected Xet downloads could silently fall back to LFS. Correctness fix for Xet-hosted repos.
-
----
-
-## Platform Minimum Version Change
-
-| Version | iOS Minimum | macOS Minimum |
-|---------|-------------|---------------|
-| 0.7.0   | iOS 16      | macOS 13      |
-| 0.8.0+  | **iOS 17**  | macOS 14      |
-
-The iOS minimum bumped from 16 to 17 in `Package.swift`. This is the root cause of the
-`"HuggingFace requires minimum platform version 17.0"` build error seen in this project.
-Any package that depends on the `HuggingFace` product (directly or transitively) must
-declare `.iOS(.v17)` or higher.
-
-**Packages fixed in this project on 2026-03-15:**
-- `thirdparty/WhisperKit` — upgraded to iOS 17
-- `thirdparty/mlx-swift-examples` — upgraded to iOS 17
+README updated to reflect version 0.9.0. No code changes.
 
 ---
 
 ## Risk Assessment
 
-### Low Risk
+### Overall Risk: LOW to MEDIUM
 
-| Change | Risk | Reason |
-|--------|------|--------|
-| Parallel downloads (#35) | Low | Additive performance optimization; API call sites unchanged |
-| Model/dataset API expansion (#28) | Low | Purely additive new enums and properties; no existing types changed |
-| Dataset parquet fix (#39) | Low | Only affects dataset repos with URL-only parquet entries; no behavior change for model repos |
-| Xet CDN metadata fix (#31) | Low | Only affects Xet-hosted repos; LFS repos are unaffected |
-| CI infrastructure (#32) | Low | Build system only; no code change |
+| Area | Risk | Severity | Notes |
+|------|------|----------|-------|
+| **Swift tools version** | `Package.swift` now requires swift-tools-version 6.1 | **Medium** | Requires Xcode 16.3+ (Swift 6.1 toolchain). Confirm CI and dev machines meet this requirement before merging. |
+| **Xet trait (default on)** | `swift-xet` is still linked when Xet trait is active | Low | Adds a dependency but does not change LFS download behavior. Xet is only used when the Hub resolves a Xet-backed URL. |
+| **Mac Catalyst OAuth** | Compile-time fix, no runtime change | Low | Eliminates a build failure; no behavior change for end users. |
+| **Inference URL routing** | New `ProviderRouting.swift` changes how non-chat URLs are built | Low-Medium | The previous behavior always returned 404, so any working call site is unaffected. Only newly working features are at risk from provider-side API changes. |
+| **`/v1` stripping logic** | Modifies URL construction for all provider-routed endpoints | Low | Logic is deterministic and covers both `/v1` and `/v1/` suffixes. Only applies to non-chat endpoints. |
+| **MLX/GGUF filter** | Additive parameter, nil by default | None | Fully backward compatible. |
 
-### Medium Risk
+### Action Items Before Merging
 
-| Change | Risk | Reason |
-|--------|------|--------|
-| Cache-first snapshot with resume (#34) | Medium | New `localFilesOnly` parameter changes error semantics; the cache-first path could skip a re-download if the caller intended a fresh fetch |
-| Lock hierarchy change (#36) | Medium | Stale lock files at old paths (beside blobs) will not be cleaned up automatically after upgrade |
-| swift-xet URL change (#44) | Medium | `Package.resolved` requires re-resolution; any Xcode package override pointing to the old URL needs updating |
-
-### High Risk (iOS-specific)
-
-| Change | Risk | Reason |
-|--------|------|--------|
-| Cache path refactor (#40) | High | Behavior change for sandboxed macOS/Mac Catalyst: cache path switches from `~/.cache/` to app container `Library/Caches/`. Existing users upgrading on Mac Catalyst will lose access to their cache at `~/.cache/huggingface/hub` and must re-download models. On iOS the behavior is unchanged. |
-| Platform minimum iOS 17 | High | Any package declaring iOS 16 that consumes the `HuggingFace` product fails to build. Full audit of transitive consumers required. |
-| Reentrant file lock rewrite (#29) | High | Full rewrite of `FileLock`. Concurrent tasks that previously serialized through non-reentrant locking now behave differently under structured concurrency. Regression risk for any code path that holds a file lock across an `await` and also calls `downloadSnapshot` internally. Unlikely in typical usage but requires integration testing. |
-
----
-
-## Migration Checklist
-
-- [ ] Verify all packages in the project that use `HuggingFace` declare `.iOS(.v17)` or higher
-- [ ] For Mac Catalyst users: note that model caches at `~/.cache/huggingface/hub` will no longer be used after upgrade — models will re-download to the app container
-- [ ] Review any call sites using `downloadSnapshot` with a custom destination URL — destination path handling changed in #43
-- [ ] If `HF_HUB_CACHE` is set to a custom path, verify it still resolves correctly under the new `defaultCacheDirectory()` logic
-- [ ] Check for stale `.lock` files at old locations after upgrading (moved to `.locks/` subdirectory in #36)
-- [ ] Run `File > Packages > Update to Latest Package Versions` in Xcode after the swift-xet URL change in #44
+1. **Verify Xcode version:** Confirm that the build environment (local machines and CI) supports swift-tools-version 6.1 (requires Xcode 16.3 or later).
+2. **Test Mac Catalyst build:** Run a Mac scheme build after this update to confirm the OAuth duplicate-symbol fix resolves cleanly.
+3. **Smoke-test image generation:** Exercise at least one `textToImage` call through a fal-ai or hf-inference provider to confirm the routing fix works end-to-end.
+4. **Inspect Xet trait activation:** Decide whether to explicitly disable the `Xet` trait in `Package.swift` for the app target if binary size or build time is a concern. If left enabled (default), no functional change is expected for normal use.
